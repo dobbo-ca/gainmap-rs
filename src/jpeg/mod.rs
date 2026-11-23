@@ -6,7 +6,8 @@ use crate::budget::Budget;
 use crate::types::resolve_metadata;
 use crate::xmp::{self, Parsed};
 use crate::{
-    Codec, CodedImage, Container, Error, GainMap, GainMapImage, IsoMetadata, Kind, Limits, Location,
+    Codec, CodedImage, Container, Error, GainMap, GainMapImage, IsoMetadata, Kind, Limit, Limits,
+    Location,
 };
 
 pub(crate) mod mpf;
@@ -31,6 +32,14 @@ struct Found {
     issues: Vec<&'static str>,
 }
 
+/// Fails when the frame has more pixels than `limits.max_pixels`.
+fn check_pixels(sof: &scan::Sof, limits: &Limits) -> Result<(), Error> {
+    if u64::from(sof.width) * u64::from(sof.height) > limits.max_pixels {
+        return Err(Error::LimitExceeded(Limit::Pixels));
+    }
+    Ok(())
+}
+
 /// `data` is a JPEG (it starts with SOI).
 pub(crate) fn read(
     data: &[u8],
@@ -39,6 +48,7 @@ pub(crate) fn read(
 ) -> Result<GainMapImage, Error> {
     let primary = scan::scan(data, 0, limits, budget)?;
     let sof = primary.sof.ok_or(Error::Malformed("jpeg-no-sof"))?;
+    check_pixels(&sof, limits)?;
     let base = CodedImage {
         codec: Codec::Jpeg,
         width: sof.width,
@@ -88,9 +98,11 @@ pub(crate) fn read(
         .min(limits.max_images);
     let mut cands = budget.vec::<Cand>(cap)?;
     let mut add = |start: Option<usize>, end: usize, semantic: bool| {
-        if let Some(start) = start
-            && cands.len() < cap
-        {
+        let Some(start) = start else { return };
+        // The same start from two locators is one candidate (it keeps the semantic hint).
+        if let Some(c) = cands.iter_mut().find(|c| c.start == start) {
+            c.semantic |= semantic;
+        } else if cands.len() < cap {
             cands.push(Cand {
                 start,
                 end,
@@ -192,6 +204,7 @@ pub(crate) fn read(
             });
         }
     };
+    check_pixels(&found.sof, limits)?;
     issues.extend(found.issues.iter().copied());
 
     let iso = match found
@@ -201,7 +214,7 @@ pub(crate) fn read(
         .and_then(|r| data.get(r))
         .filter(|p| p.len() > 4)
     {
-        Some(payload) => match IsoMetadata::parse(payload) {
+        Some(payload) => match IsoMetadata::parse(payload, limits) {
             Ok(iso) => Some(iso),
             Err(_) => {
                 issues.push("iso-truncated");

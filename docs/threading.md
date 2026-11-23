@@ -15,6 +15,6 @@ Why not decode the base and the gain map in parallel: the base is much larger th
 so the gain would be small, and both output buffers would be alive at once on top of the planes.
 Callers that read many files parallelise across files.
 
-Cancellation from another thread works: every entry point takes `&AtomicBool`, read with relaxed
+Cancellation from another thread works: `read`, `decode` and `coded_bytes` take `&AtomicBool`, read with relaxed
 loads at the points listed in limits.md. `Budget` is not `Sync`, by design: one budget belongs to
 one call on one thread.

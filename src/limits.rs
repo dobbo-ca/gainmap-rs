@@ -1,5 +1,6 @@
-/// Caps on one call. Every public entry point takes `&Limits` and a cancel flag; there is no
-/// unlimited entry point. The defaults are finite and large enough for real phone photos.
+/// Caps on one call. `read`, `decode`, `GainMapImage::coded_bytes` and `IsoMetadata::parse` take
+/// `&Limits` (the first three also a cancel flag); there is no unlimited entry point. The
+/// defaults are finite and large enough for real phone photos.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     /// The peak working memory of one call, in bytes (default 1 GiB), all threads together and

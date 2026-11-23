@@ -5,7 +5,7 @@
 //! `lib/src/gainmapmetadata.cpp` of libultrahdr v2.0.2 (Copyright 2024 The Android Open Source
 //! Project; licensed MIT OR Apache-2.0). See NOTICE.
 
-use crate::{Error, Metadata};
+use crate::{Error, Limits, Metadata};
 
 /// A rational number as stored: a signed numerator (an `i64` holds both `s32` and `u32`) and an
 /// unsigned denominator.
@@ -104,25 +104,48 @@ impl Reader<'_> {
 impl IsoMetadata {
     /// Parses the payload that starts at `minimum_version`: no `urn:iso:std:iso:ts:21496:-1`
     /// namespace and no `tmap` version byte. Bytes after the last field are ignored, as in
-    /// libultrahdr. A `minimum_version` other than 0 parses; [`Metadata::from_iso`] refuses it.
+    /// libultrahdr. A `minimum_version` other than 0 means a layout this crate does not know, so
+    /// parsing stops after the header: the result keeps the two versions and the flags byte (0 if
+    /// the payload ends first), every fraction is 0/0, and [`Metadata::from_iso`] refuses it.
+    ///
+    /// `limits` is part of the crate's calling convention; this parser allocates nothing and
+    /// reads at most the payload, so no limit applies.
     ///
     /// # Errors
     ///
-    /// [`Error::Truncated`] when the payload ends before the last field (this includes the
-    /// 4-byte "version only" payload of a primary image). It allocates nothing.
-    pub fn parse(payload: &[u8]) -> Result<IsoMetadata, Error> {
+    /// [`Error::Truncated`] when `minimum_version` is 0 and the payload ends before the last
+    /// field (this includes the 4-byte "version only" payload of a primary image), or when it
+    /// ends inside the two version fields.
+    pub fn parse(payload: &[u8], _limits: &Limits) -> Result<IsoMetadata, Error> {
         let mut r = Reader {
             data: payload,
             pos: 0,
         };
         let minimum_version = r.u16()?;
         let writer_version = r.u16()?;
-        let flags = r.u8()?;
-        let count = if flags & MULTICHANNEL != 0 { 3 } else { 1 };
         let zero = Fraction {
             numerator: 0,
             denominator: 0,
         };
+        if minimum_version != 0 {
+            let blank = IsoChannel {
+                gain_map_min: zero,
+                gain_map_max: zero,
+                gamma: zero,
+                base_offset: zero,
+                alternate_offset: zero,
+            };
+            return Ok(IsoMetadata {
+                minimum_version,
+                writer_version,
+                flags: r.u8().unwrap_or(0),
+                base_hdr_headroom: zero,
+                alternate_hdr_headroom: zero,
+                channels: [blank; 3],
+            });
+        }
+        let flags = r.u8()?;
+        let count = if flags & MULTICHANNEL != 0 { 3 } else { 1 };
         let blank = IsoChannel {
             gain_map_min: zero,
             gain_map_max: zero,
@@ -243,6 +266,9 @@ mod tests {
 
     #[test]
     fn version_only() {
-        assert_eq!(IsoMetadata::parse(&[0, 0, 0, 0]), Err(Error::Truncated));
+        assert_eq!(
+            IsoMetadata::parse(&[0, 0, 0, 0], &Limits::default()),
+            Err(Error::Truncated)
+        );
     }
 }

@@ -329,3 +329,69 @@ fn truncated_and_damaged_files_never_panic() {
         }
     }
 }
+
+#[test]
+fn never_drop_xmp_without_gainmapmax() {
+    // Version and HDRCapacityMax but no GainMapMax, found through the fallback locator.
+    let xml = xmp_doc(
+        HDRGM_DECL,
+        "hdrgm:Version=\"1.0\" hdrgm:HDRCapacityMax=\"3\"",
+        "",
+    );
+    let g = kept(&[app1_xmp(&xml)]);
+    assert!(g.metadata.is_none() && g.xmp.is_some());
+    assert_eq!(g.issues, vec!["xmp-missing-gainmapmax"]);
+}
+
+#[test]
+fn read_checks_max_pixels_of_both_images() {
+    let l = gainmap::Limits {
+        max_pixels: 100,
+        ..limits()
+    };
+    // Base 16x16 = 256 pixels.
+    let b = with_mpf(&primary_segs(), &jpeg_rgb(16, 16), &gm_std(), true);
+    assert_eq!(
+        gainmap::read(&b.file, &l, &no_cancel()).map(|_| ()),
+        Err(Error::LimitExceeded(Limit::Pixels))
+    );
+    // Base 8x8 = 64 pixels fits; the gain map 16x16 does not.
+    let gm = with_segments(&jpeg_gray(16, 16), &[app1_xmp(&gm_xmp("2", "2.5"))]);
+    let b = with_mpf(&primary_segs(), &jpeg_rgb(8, 8), &gm, true);
+    assert_eq!(
+        gainmap::read(&b.file, &l, &no_cancel()).map(|_| ()),
+        Err(Error::LimitExceeded(Limit::Pixels))
+    );
+}
+
+#[test]
+fn fill_bytes_and_tem_markers_count_as_segments() {
+    let l = gainmap::Limits {
+        max_segments: 10,
+        ..limits()
+    };
+    let base = jpeg_rgb(16, 16);
+    let mut fill = base[..2].to_vec();
+    fill.extend_from_slice(&[0xFF; 50]);
+    fill.extend_from_slice(&base[2..]);
+    assert_eq!(
+        gainmap::__fuzz::jpeg_scan(&fill, &l),
+        Err(Error::LimitExceeded(Limit::Segments))
+    );
+    let mut tem = base[..2].to_vec();
+    tem.extend_from_slice(&[0xFF, 0x01].repeat(50));
+    tem.extend_from_slice(&base[2..]);
+    assert_eq!(
+        gainmap::__fuzz::jpeg_scan(&tem, &l),
+        Err(Error::LimitExceeded(Limit::Segments))
+    );
+    // The unmodified image is under the limit of a normal run.
+    assert!(gainmap::__fuzz::jpeg_scan(&base, &limits()).is_ok());
+}
+
+#[test]
+fn minimum_version_with_another_layout_is_not_truncated() {
+    let g = kept(&[app2_iso(&[0, 1, 0, 1, 0x48])]);
+    assert!(g.metadata.is_none());
+    assert_eq!(g.issues, vec!["iso-minimum-version"]);
+}

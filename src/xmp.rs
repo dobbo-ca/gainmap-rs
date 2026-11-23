@@ -31,11 +31,14 @@ pub(crate) fn parse(
     };
     match exif::Xmp::parse(packet, None, &l, budget.cancel()) {
         Ok(xmp) => {
+            // Counts the capacity exif holds (a value keeps the room of its raw span even when
+            // entities shrink it), not the length. exif also reserves a slot for a property it
+            // then leaves out as not UTF-8; those slots cannot be seen from here.
             let props = xmp.properties().iter().fold(0usize, |sum, p| {
                 sum.saturating_add(size_of::<exif::Property>())
-                    .saturating_add(p.ns.len())
-                    .saturating_add(p.name.len())
-                    .saturating_add(p.value.len())
+                    .saturating_add(p.ns.capacity())
+                    .saturating_add(p.name.capacity())
+                    .saturating_add(p.value.capacity())
             });
             let cost = xmp.raw().len().saturating_add(props);
             budget.charge(cost)?;
@@ -44,7 +47,9 @@ pub(crate) fn parse(
         Err(exif::Error::LimitExceeded(exif::Limit::Alloc)) => {
             Err(Error::LimitExceeded(Limit::Alloc))
         }
-        Err(exif::Error::LimitExceeded(exif::Limit::XmpBytes)) => {
+        // The node count of a packet is bounded by its size, so exif's node limit is reported as
+        // the packet-size limit.
+        Err(exif::Error::LimitExceeded(exif::Limit::XmpBytes | exif::Limit::XmpNodes)) => {
             Err(Error::LimitExceeded(Limit::XmpBytes))
         }
         Err(exif::Error::OutOfMemory) => Err(Error::OutOfMemory),
@@ -63,9 +68,11 @@ pub(crate) fn release(budget: &Budget<'_>, parsed: Option<Parsed>) {
     }
 }
 
-/// The packet describes a gain map image: `hdrgm:GainMapMax` or any Apple `HDRGainMap` property.
+/// The packet describes a gain map image: any `hdrgm` property (a packet without `GainMapMax`
+/// still counts, so the read keeps the image and reports `xmp-missing-gainmapmax`) or any Apple
+/// `HDRGainMap` property.
 pub(crate) fn is_gain_map(xmp: &exif::Xmp) -> bool {
-    xmp.get(NS_HDRGM, "GainMapMax").is_some() || has_apple(xmp)
+    xmp.hdrgm().next().is_some() || has_apple(xmp)
 }
 
 /// The text of `hdrgm:Version`.
@@ -161,6 +168,13 @@ impl Metadata {
     /// one value applies to all channels; three values are R, G, B. XMP has no colour-space
     /// field, so `use_base_colour_space` is true, as in libultrahdr.
     ///
+    /// `OffsetSDR` and `HDRCapacityMin` belong to the SDR rendition, `OffsetHDR` and
+    /// `HDRCapacityMax` to the HDR one. Normally the base is the SDR rendition, so they become
+    /// `base_offset`, `base_hdr_headroom`, `alternate_offset` and `alternate_hdr_headroom`. When
+    /// `BaseRenditionIsHDR` is True the base is the HDR rendition: `backward_direction` is set
+    /// and the base fields take the HDR values (`OffsetHDR`, `HDRCapacityMax`) while the
+    /// alternate fields take the SDR ones.
+    ///
     /// # Errors
     ///
     /// [`Error::Malformed`] with the token `xmp-missing-gainmapmax`,
@@ -179,14 +193,23 @@ impl Metadata {
         let (gamma, c) = channels(&xmp.gamma, 1.0)?;
         let (base_offset, d) = channels(&xmp.offset_sdr, 1.0 / 64.0)?;
         let (alternate_offset, e) = channels(&xmp.offset_hdr, 1.0 / 64.0)?;
-        let base_hdr_headroom = match xmp.hdr_capacity_min.as_deref() {
+        let capacity_min = match xmp.hdr_capacity_min.as_deref() {
             Some(s) => num(s)?,
             None => 0.0,
         };
+        let capacity_max = num(capacity_max)?;
         let backward_direction = xmp
             .base_rendition_is_hdr
             .as_deref()
             .is_some_and(|s| s.trim_ascii().eq_ignore_ascii_case("true"));
+        // `OffsetSDR` and `HDRCapacityMin` describe the SDR rendition, `OffsetHDR` and
+        // `HDRCapacityMax` the HDR one. When the base is the HDR rendition the two swap roles.
+        let (base_offset, alternate_offset, base_hdr_headroom, alternate_hdr_headroom) =
+            if backward_direction {
+                (alternate_offset, base_offset, capacity_max, capacity_min)
+            } else {
+                (base_offset, alternate_offset, capacity_min, capacity_max)
+            };
         Ok(Metadata {
             gain_map_min,
             gain_map_max,
@@ -194,7 +217,7 @@ impl Metadata {
             base_offset,
             alternate_offset,
             base_hdr_headroom,
-            alternate_hdr_headroom: num(capacity_max)?,
+            alternate_hdr_headroom,
             use_base_colour_space: true,
             multichannel: a || b || c || d || e,
             backward_direction,

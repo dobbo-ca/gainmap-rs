@@ -143,3 +143,25 @@ fn packets_without_hdrgm_or_not_xml() {
         Ok(None)
     );
 }
+
+#[test]
+fn base_rendition_is_hdr_swaps_the_sdr_and_hdr_values() {
+    let xml = xmp_doc(
+        HDRGM_DECL,
+        "hdrgm:Version=\"1.0\" hdrgm:GainMapMax=\"2\" hdrgm:OffsetSDR=\"0.01\" \
+         hdrgm:OffsetHDR=\"0.05\" hdrgm:HDRCapacityMin=\"0.5\" hdrgm:HDRCapacityMax=\"3\"",
+        "",
+    );
+    let mut x = parse(&xml);
+    let m = Metadata::from_xmp(&x).unwrap();
+    assert!(!m.backward_direction);
+    assert_eq!((m.base_offset, m.alternate_offset), ([0.01; 3], [0.05; 3]));
+    assert_eq!((m.base_hdr_headroom, m.alternate_hdr_headroom), (0.5, 3.0));
+
+    // The base is the HDR rendition: its offset and headroom are the HDR ones.
+    x.base_rendition_is_hdr = Some("True".to_string());
+    let m = Metadata::from_xmp(&x).unwrap();
+    assert!(m.backward_direction);
+    assert_eq!((m.base_offset, m.alternate_offset), ([0.05; 3], [0.01; 3]));
+    assert_eq!((m.base_hdr_headroom, m.alternate_hdr_headroom), (3.0, 0.5));
+}
