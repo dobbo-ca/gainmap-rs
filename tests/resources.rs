@@ -360,7 +360,8 @@ fn decode_threads_stay_under_max_threads() {
     let _g = lock();
     let data = ultra_hdr(BIG_BASE, BIG_GM);
     let img = gainmap::read(&data, &limits_of(1 << 30, 1), &no_cancel()).unwrap();
-    // jpeg really runs this base on more than one worker (a pool task that wakes after the
+    // jpeg really runs this base on more than one worker in its RGBA colour pass, the pass that
+    // gainmap::decode uses (a pool task that wakes after the
     // caller took every job is not counted, so it may take a few tries).
     let base = img
         .coded_bytes(&data, &img.base, &limits(), &no_cancel())
@@ -373,7 +374,10 @@ fn decode_threads_stay_under_max_threads() {
         .map(|_| {
             jpeg::decode_probe(
                 &base,
-                &jpeg::DecodeOptions::default(),
+                &jpeg::DecodeOptions {
+                    format: jpeg::Format::Rgba,
+                    ..jpeg::DecodeOptions::default()
+                },
                 &jl,
                 &no_cancel(),
                 false,
