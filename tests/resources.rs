@@ -250,7 +250,14 @@ fn read_peak_with_a_big_xmp_item() {
     };
     let (below, need) = min_alloc(|cap| run(cap).0.is_ok());
     assert!(need >= 3 << 20, "the packet is not charged: {need}");
-    for cap in [below, need, need / 2, 1 << 20, 2 * need, Limits::default().max_alloc] {
+    for cap in [
+        below,
+        need,
+        need / 2,
+        1 << 20,
+        2 * need,
+        Limits::default().max_alloc,
+    ] {
         let (r, peak) = run(cap);
         let at = format!("big xmp max_alloc {cap}");
         match r {
@@ -266,7 +273,10 @@ fn read_peak_with_a_big_xmp_item() {
     // the slack, so a ledger that charged nothing could not pass.
     let (r, peak) = run(Limits::default().max_alloc);
     assert_eq!(r, Ok(()));
-    assert!(peak >= 3 << 20, "peak {peak} is below the size of the packet");
+    assert!(
+        peak >= 3 << 20,
+        "peak {peak} is below the size of the packet"
+    );
 }
 
 // Decode of two big images: the base (9 MiB of RGBA) stays alive while the gain map decodes. At
@@ -287,8 +297,18 @@ fn decode_peak_within_max_alloc() {
             measured(|| gainmap::decode(&data, &img, &lim, &no_cancel()))
         };
         let (below, need) = min_alloc(|cap| run(cap).0.is_ok());
-        assert!(need >= base_bytes, "threads {t}: the base is not charged: {need}");
-        for cap in [below, need, need / 2, 256 << 10, 2 * need, Limits::default().max_alloc] {
+        assert!(
+            need >= base_bytes,
+            "threads {t}: the base is not charged: {need}"
+        );
+        for cap in [
+            below,
+            need,
+            need / 2,
+            256 << 10,
+            2 * need,
+            Limits::default().max_alloc,
+        ] {
             let at = format!("threads {t} max_alloc {cap}");
             let (r, peak) = run(cap);
             match &r {
@@ -306,7 +326,10 @@ fn decode_peak_within_max_alloc() {
         // At a generous cap the call holds both images, so the peak is far above the slack.
         let (r, peak) = run(Limits::default().max_alloc);
         assert!(r.is_ok());
-        assert!(peak >= base_bytes, "threads {t}: peak {peak} is below the base");
+        assert!(
+            peak >= base_bytes,
+            "threads {t}: peak {peak} is below the base"
+        );
     }
 }
 
@@ -360,14 +383,20 @@ fn decode_threads_stay_under_max_threads() {
         })
         .max()
         .unwrap_or(0);
-    assert!(peak > 1, "the image is too small for jpeg to thread: {peak}");
+    assert!(
+        peak > 1,
+        "the image is too small for jpeg to thread: {peak}"
+    );
 
     for t in [1usize, 2] {
         let lim = limits_of(1 << 30, t);
         let used = threads_used(|| {
             assert!(gainmap::decode(&data, &img, &lim, &no_cancel()).is_ok());
         });
-        assert!(used >= 1 && used as usize <= t, "max_threads {t}: {used} threads");
+        assert!(
+            used >= 1 && used as usize <= t,
+            "max_threads {t}: {used} threads"
+        );
     }
     // And the result of the whole call is the same for both values.
     let one = gainmap::decode(&data, &img, &limits_of(1 << 30, 1), &no_cancel());
@@ -379,6 +408,8 @@ fn decode_threads_stay_under_max_threads() {
 // The grep-able claim of docs/threading.md: nothing in src/ starts a thread.
 #[test]
 fn src_spawns_no_thread() {
+    // Holds the lock so its allocations cannot land in the thread count of another test.
+    let _g = lock();
     fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(rd) = fs::read_dir(dir) else { return };
         for e in rd.flatten() {
