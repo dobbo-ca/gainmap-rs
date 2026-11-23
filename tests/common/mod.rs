@@ -364,9 +364,11 @@ struct ItemSpec {
     data: Vec<u8>,
     /// 1-based property indices, the last one essential when `essential` is set.
     assoc: Vec<u16>,
+    /// How many `iloc` extents the data is split into (see [`Heif::split`]).
+    extents: usize,
 }
 
-/// A HEIF file builder: `iloc` version 0, one extent per item, 16-bit ids.
+/// A HEIF file builder: `iloc` version 0, one extent per item (see [`Heif::split`]), 16-bit ids.
 pub struct Heif {
     major: [u8; 4],
     pub primary: u32,
@@ -401,7 +403,16 @@ impl Heif {
             mime: false,
             data: data.to_vec(),
             assoc: assoc.to_vec(),
+            extents: 1,
         });
+        self
+    }
+
+    /// Stores the data of item `id` in `n` back to back extents.
+    pub fn split(&mut self, id: u32, n: usize) -> &mut Self {
+        if let Some(it) = self.items.iter_mut().find(|i| i.id == id) {
+            it.extents = n.clamp(1, it.data.len().max(1));
+        }
         self
     }
 
@@ -443,16 +454,26 @@ impl Heif {
             0,
             &cat(&[&(self.items.len() as u16).to_be_bytes(), &infes]),
         ));
-        // iloc v0: 4-byte offsets and lengths, no base, one extent each.
+        // iloc v0: 4-byte offsets and lengths, no base, `extents` extents each.
         let mut iloc = vec![0x44, 0];
         iloc.extend_from_slice(&(self.items.len() as u16).to_be_bytes());
         let mut at = mdat_at;
         for it in &self.items {
             iloc.extend_from_slice(&(it.id as u16).to_be_bytes());
-            iloc.extend_from_slice(&[0, 0, 0, 1]);
-            iloc.extend_from_slice(&at.to_be_bytes());
-            iloc.extend_from_slice(&(it.data.len() as u32).to_be_bytes());
-            at += it.data.len() as u32;
+            iloc.extend_from_slice(&[0, 0]);
+            iloc.extend_from_slice(&(it.extents as u16).to_be_bytes());
+            // All extents have the same length, the last one takes the rest.
+            let each = it.data.len() / it.extents;
+            for k in 0..it.extents {
+                let len = if k + 1 == it.extents {
+                    it.data.len() - each * k
+                } else {
+                    each
+                };
+                iloc.extend_from_slice(&at.to_be_bytes());
+                iloc.extend_from_slice(&(len as u32).to_be_bytes());
+                at += len as u32;
+            }
         }
         kids.extend(fbx(b"iloc", 0, &iloc));
         if !self.refs.is_empty() {
@@ -532,5 +553,20 @@ pub fn heic_apple() -> Vec<u8> {
     s.xmp_item(3, &apple_xmp());
     s.link(b"auxl", 2, &[1]);
     s.link(b"cdsc", 3, &[2]);
+    s.build()
+}
+
+/// Like [`avif_tmap`], with the given `tmap` payload (the version byte included) and `altr` group.
+pub fn avif_tmap_custom(payload: &[u8], altr: &[u32]) -> Vec<u8> {
+    let mut s = Heif::new(b"avif");
+    s.primary = 3;
+    let size = s.prop(ispe(64, 48));
+    let small = s.prop(ispe(32, 24));
+    let cfg = s.prop(av1c());
+    s.item(1, b"av01", &[1; 4], &[size, cfg]);
+    s.item(2, b"av01", &[2; 4], &[small, cfg]);
+    s.item(3, b"tmap", payload, &[]);
+    s.link(b"dimg", 3, &[1, 2]);
+    s.group(b"altr", 100, altr);
     s.build()
 }
