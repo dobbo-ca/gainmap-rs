@@ -18,7 +18,9 @@ Sources, 47 files in all:
 Where a file came from a person's own photos (some libavif test files say "personal photo"), the
 licence is the one the owner of the repository gave it; the libavif `tests/data/README.md` says
 "same as libavif" (BSD-2-Clause) for every libavif gain-map file below except
-`seine_sdr_gainmap_big_srgb.avif`, which has no licence line (it is a file of the same repository).
+`seine_sdr_gainmap_big_srgb.avif`, which has no per-file line. Its licence is the licence of the
+libavif repository it is stored in, BSD-2-Clause (the repository has no other licence for
+`tests/data`), and `corpus.tsv` and the table below say so.
 
 ## What each group tests
 
@@ -104,8 +106,9 @@ Name is the local file name (`corpus.tsv`). Sizes are bytes.
 
 - The libultrahdr benchmark zip (206 MB, no licence stated).
 - Eric Chan's ISO JPEG set ("All rights reserved").
-- Commons files over 10 MB, files that show people, and any file with a licence that is not
-  CC BY, CC BY-SA, BSD or MIT.
+- Commons files over 10 MB, except `commons_echo_park.jpg` (21.8 MB), which is kept on purpose: it is
+  the Lightroom file with XMP `rdf:Seq` and ISO payloads.
+- Files that show people, and any file with a licence that is not CC BY, CC BY-SA, BSD or MIT.
 - Any file from a private person's library.
 
 ## Adding a file

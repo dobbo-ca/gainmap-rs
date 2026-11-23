@@ -3,7 +3,8 @@
 # tests/fuzz/make-seeds.sh <out-dir> makes <out-dir>/<target>/ for every fuzz target. The
 # Dockerfile fuzz stage runs it with /seeds; fuzz.yml hands those directories to libFuzzer.
 #   read    Ultra HDR JPEGs (MPF, GContainer only, "image that follows", XMP Seq, ISO only,
-#           truncated), a JPEG without a gain map, an AVIF with a tmap item
+#           truncated), a JPEG without a gain map, an AVIF with a tmap item (and one with an XMP
+#           item too), a HEIC with an Apple auxiliary gain map and two XMP items
 #   decode  [selector byte][file]: the same files, selector 0 (tiny max_alloc) and 3 (64 MiB)
 #   iso     ISO 21496-1 payloads: one channel, three channels, common denominator, truncated
 #   mpf     MPF payloads from the endian field: big and little endian, truncated
@@ -109,26 +110,36 @@ head -c "$((primary - 20))" "$t/uhdr-be.jpg" > "$t/cut-in-primary.jpg"
 
 # ---- an AVIF with a tmap item: base (1), gain map (2), tmap (3) derived from both, in an altr
 # group with the tmap first; the item data is in the mdat. The coded items are 4 stub bytes.
+# build_meta <offset of the mdat payload> [xmp]: with "xmp" there is also an XMP item (4, mime
+# application/rdf+xml) that describes the base image (cdsc) and holds hdrgm:Version, so the
+# HEIF XMP path (item size check, nested XMP parse) has a seed.
 box() { p=$(mktemp "$t/b.XXXXXX"); cat > "$p"; be32 $(($(size "$p") + 8)); printf '%s' "$1"; cat "$p"; rm -f "$p"; }
 full() { bytes 0 0 0 0; }
 infe() { { bytes 2 0 0 0; be16 "$1"; be16 0; printf '%s' "$2"; bytes 0; } | box infe; }
+# An infe of type mime with content type application/rdf+xml (the XMP item of HEIF).
+infe_xmp() { { bytes 2 0 0 0; be16 "$1"; be16 0; printf 'mime'; bytes 0; printf 'application/rdf+xml'; bytes 0 0; } | box infe; }
 { printf 'avif'; be32 0; printf 'avif'; printf 'mif1'; printf 'tmap'; } | box ftyp > "$t/ftyp"
 { bytes 0; cat "$t/iso1"; } > "$t/tmap-item"
-build_meta() { # <offset of the mdat payload>
+build_meta() {
+  x=0; if [ "${2:-}" = xmp ]; then x=1; fi
   {
     full
     { full; be32 0; printf 'pict'; be32 0; be32 0; be32 0; bytes 0; } | box hdlr
     { full; be16 1; } | box pitm
-    { full; be16 3; infe 1 av01; infe 2 av01; infe 3 tmap; } | box iinf
-    { full; { be16 3; be16 2; be16 1; be16 2; } | box dimg; } | box iref
+    { full; be16 $((3 + x)); infe 1 av01; infe 2 av01; infe 3 tmap; if [ "$x" = 1 ]; then infe_xmp 4; fi; } | box iinf
+    {
+      full; { be16 3; be16 2; be16 1; be16 2; } | box dimg
+      if [ "$x" = 1 ]; then { be16 4; be16 1; be16 1; } | box cdsc; fi
+    } | box iref
     {
       { { full; be32 16; be32 16; } | box ispe; { bytes 129 0 0 0; } | box av1C; } | box ipco
       { full; be32 3; bytes 0 1 2 1 2 0 2 2 1 2 0 3 1 1; } | box ipma
     } | box iprp
-    { full; bytes 68 0; be16 3
+    { full; bytes 68 0; be16 $((3 + x))
       be16 1; be16 0; be16 1; be32 "$1"; be32 4
       be16 2; be16 0; be16 1; be32 $(($1 + 4)); be32 4
       be16 3; be16 0; be16 1; be32 $(($1 + 8)); be32 $(size "$t/tmap-item")
+      if [ "$x" = 1 ]; then be16 4; be16 0; be16 1; be32 $(($1 + 8 + $(size "$t/tmap-item"))); be32 "$(size "$t/xmp-version")"; fi
     } | box iloc
     { { full; be32 1; be32 2; be32 3; be32 1; } | box altr; } | box grpl
   } | box meta
@@ -136,9 +147,52 @@ build_meta() { # <offset of the mdat payload>
 build_meta 0 > "$t/meta0"
 mdat_at=$(($(size "$t/ftyp") + $(size "$t/meta0") + 8))
 { cat "$t/ftyp"; build_meta "$mdat_at"; { printf 'AV1a'; printf 'AV1b'; cat "$t/tmap-item"; } | box mdat; } > "$t/tmap.avif"
+build_meta 0 xmp > "$t/meta0x"
+mdat_at=$(($(size "$t/ftyp") + $(size "$t/meta0x") + 8))
+{ cat "$t/ftyp"; build_meta "$mdat_at" xmp; { printf 'AV1a'; printf 'AV1b'; cat "$t/tmap-item"; cat "$t/xmp-version"; } | box mdat; } > "$t/tmap-xmp.avif"
+
+# ---- an iPhone-style HEIC: the primary image (1), the Apple gain map (2) as an auxiliary image
+# (auxl reference, auxC urn:com:apple:photo:2020:aux:hdrgainmap), and two XMP items: 3 describes
+# the primary (hdrgm:Version) and 4 describes the gain map (the Apple HDRGainMap headroom). The
+# coded items are 4 stub bytes behind a minimal hvcC (no NAL arrays).
+{ printf 'heic'; be32 0; printf 'mif1'; printf 'heic'; } | box ftyp > "$t/ftyp-heic"
+{ bytes 1 0; rep 0 14; bytes 1 0 0 0 0 3 0; } > "$t/hvcc"
+{ full; printf 'urn:com:apple:photo:2020:aux:hdrgainmap'; bytes 0; } > "$t/auxc"
+build_heic() { # <offset of the mdat payload>
+  {
+    full
+    { full; be32 0; printf 'pict'; be32 0; be32 0; be32 0; bytes 0; } | box hdlr
+    { full; be16 1; } | box pitm
+    { full; be16 4; infe 1 hvc1; infe 2 hvc1; infe_xmp 3; infe_xmp 4; } | box iinf
+    {
+      full
+      { be16 2; be16 1; be16 1; } | box auxl
+      { be16 3; be16 1; be16 1; } | box cdsc
+      { be16 4; be16 1; be16 2; } | box cdsc
+    } | box iref
+    {
+      {
+        { full; be32 16; be32 16; } | box ispe
+        box hvcC < "$t/hvcc"
+        box auxC < "$t/auxc"
+        { full; be32 8; be32 8; } | box ispe
+      } | box ipco
+      { full; be32 2; bytes 0 1 2 1 2 0 2 3 4 2 3; } | box ipma
+    } | box iprp
+    { full; bytes 68 0; be16 4
+      be16 1; be16 0; be16 1; be32 "$1"; be32 4
+      be16 2; be16 0; be16 1; be32 $(($1 + 4)); be32 4
+      be16 3; be16 0; be16 1; be32 $(($1 + 8)); be32 "$(size "$t/xmp-version")"
+      be16 4; be16 0; be16 1; be32 $(($1 + 8 + $(size "$t/xmp-version"))); be32 "$(size "$t/xmp-apple")"
+    } | box iloc
+  } | box meta
+}
+build_heic 0 > "$t/meta0h"
+mdat_at=$(($(size "$t/ftyp-heic") + $(size "$t/meta0h") + 8))
+{ cat "$t/ftyp-heic"; build_heic "$mdat_at"; { printf 'HEV1'; printf 'HEV2'; cat "$t/xmp-version"; cat "$t/xmp-apple"; } | box mdat; } > "$t/apple.heic"
 
 # ---- the seeds of each target.
-for f in uhdr-be.jpg uhdr-le.jpg uhdr-gcontainer.jpg uhdr-follows.jpg uhdr-seq.jpg uhdr-iso.jpg plain.jpg cut-in-gm.jpg cut-in-primary.jpg tmap.avif; do
+for f in uhdr-be.jpg uhdr-le.jpg uhdr-gcontainer.jpg uhdr-follows.jpg uhdr-seq.jpg uhdr-iso.jpg plain.jpg cut-in-gm.jpg cut-in-primary.jpg tmap.avif tmap-xmp.avif apple.heic; do
   cp "$t/$f" "$out/read/$f"
   { bytes 3; cat "$t/$f"; } > "$out/decode/3-$f"
   { bytes 0; cat "$t/$f"; } > "$out/decode/0-$f"

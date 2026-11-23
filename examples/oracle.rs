@@ -179,8 +179,16 @@ fn uhdr_one(data: &[u8], limits: &Limits, cancel: &AtomicBool) -> Uhdr {
     };
     out.files.push(("base.rgba", decoded.base.data.clone()));
     out.files.push(("gm.raw", gm_pixels.data.clone()));
+    // The size and channel lines come before the metadata lines, and are written for a gain
+    // map without metadata too, so run.sh compares them for the Apple files as well.
+    let mut dims = String::new();
+    let _ = writeln!(dims, "base.width {}", image.base.width);
+    let _ = writeln!(dims, "base.height {}", image.base.height);
+    let _ = writeln!(dims, "gainmap.width {}", gm_pixels.width);
+    let _ = writeln!(dims, "gainmap.height {}", gm_pixels.height);
+    let _ = writeln!(dims, "gainmap.channels {}", gm_pixels.channels);
     let Some(md) = &gm.metadata else {
-        out.text = status_only("no-metadata");
+        out.text = format!("{}{dims}", status_only("no-metadata"));
         return out;
     };
     // libultrahdr refuses a map whose base rendition is the HDR one (ISO flag 0x04, XMP
@@ -196,11 +204,7 @@ fn uhdr_one(data: &[u8], limits: &Limits, cancel: &AtomicBool) -> Uhdr {
         .and_then(|i| Metadata::from_iso(i).ok())
         .is_some_and(|m| &m == md);
     let mut t = String::from("status ok\n");
-    let _ = writeln!(t, "base.width {}", image.base.width);
-    let _ = writeln!(t, "base.height {}", image.base.height);
-    let _ = writeln!(t, "gainmap.width {}", gm_pixels.width);
-    let _ = writeln!(t, "gainmap.height {}", gm_pixels.height);
-    let _ = writeln!(t, "gainmap.channels {}", gm_pixels.channels);
+    t.push_str(&dims);
     t.push_str(&metadata_lines(md, from_iso));
     out.text = t;
     out
@@ -232,13 +236,15 @@ fn avif_one(data: &[u8], limits: &Limits, cancel: &AtomicBool) -> String {
         Ok(i) => i,
         Err(e) => return status_only(e.class()),
     };
-    // libavif ignores a gain map whose metadata it cannot use (unsupported version, wrong
-    // altr group); gainmap keeps it with `metadata: None`. Both are "no gain map" here.
+    // No gain map at all (`no-gain-map`: gainmap dropped it) is not the same as a gain map that
+    // gainmap kept without usable metadata (`no-metadata`, for example an unsupported tmap
+    // version). libavif ignores a gain map it cannot use, so run.sh treats libavif's `no-gainmap`
+    // and `no-metadata` as the same outcome, and never `no-gain-map` or a read error.
     let Some(gm) = image.gain_map.as_ref() else {
-        return status_only("no-gainmap");
+        return status_only("no-gain-map");
     };
     let (Some(iso), Some(_)) = (&gm.iso, &gm.metadata) else {
-        return status_only("no-gainmap");
+        return status_only("no-metadata");
     };
     let mut t = String::from("status ok\n");
     let _ = writeln!(t, "base.width {}", image.base.width);
@@ -357,6 +363,12 @@ fn xmp_one(name: &str, data: &[u8], limits: &Limits, cancel: &AtomicBool) -> Str
         Ok(image) => match &image.gain_map {
             None => o.raw("Error", "\"no-gain-map\""),
             Some(gm) => {
+                // The sizes of the base image and the gain map, for the HEIC check of compare.py.
+                o.raw(
+                    "base",
+                    &format!("[{},{}]", image.base.width, image.base.height),
+                );
+                o.raw("gm", &format!("[{},{}]", gm.image.width, gm.image.height));
                 let mut p = Obj::new();
                 p.one("Version", gm.primary_version.as_ref());
                 o.raw("primary", &p.finish());

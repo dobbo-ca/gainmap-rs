@@ -3,10 +3,11 @@
 # tests/parity/fetch.sh <dir>   (CI uses the cache mount /corpus)
 #
 # corpus.tsv columns (tab-separated): name, url, licence, sha256 or "-", size in bytes or "-".
-# <dir>/files/<name>.ok is the stamp of a finished file: a run with the stamp does nothing for
-# it, a run without it removes what a broken earlier run left and fetches again. A size or
-# sha256 that is not "-" must match, or the script fails. It prints name, sha256 and size of
-# every file it fetched, so a "-" can be pinned later (docs/corpus.md).
+# <dir>/files/<name>.ok is the stamp of a finished file. A file with the stamp is checked again
+# on every run (size and sha256 against corpus.tsv) and kept when it matches; a file without the
+# stamp, or that no longer matches, is removed and fetched again. A size or sha256 that is not
+# "-" must match, or the script fails. It prints name, sha256 and size of every file it
+# fetched, so a "-" can be pinned later (docs/corpus.md).
 #
 # Only public files with a clear licence are listed (docs/corpus.md). The User-Agent says what
 # the request is, with no personal data.
@@ -19,13 +20,25 @@ mkdir -p "$files"
 tab=$(printf '\t')
 fetched=0
 failed=0
+ready=0
 
 # Rows without comments, as "name<TAB>url<TAB>licence<TAB>sha256<TAB>size".
 grep -v '^#' "$here/corpus.tsv" | grep -v '^$' > "$dir/corpus.rows"
 
 while IFS="$tab" read -r name url licence sha size; do
-  [ -e "$files/$name.ok" ] && continue
-  rm -f "$files/$name" "$files/$name.part"
+  # A stamped file is checked again against corpus.tsv on every run (size, then sha256: cheap
+  # next to a fetch), because the cache is shared between branches and corpus.tsv may have been
+  # re-pinned. A file that no longer matches is fetched again.
+  if [ -e "$files/$name.ok" ] && [ -f "$files/$name" ]; then
+    have_size=$(wc -c < "$files/$name" | tr -d ' ')
+    have_sha=$(sha256sum "$files/$name" | cut -d' ' -f1)
+    if { [ "$size" = "-" ] || [ "$size" = "$have_size" ]; } && { [ "$sha" = "-" ] || [ "$sha" = "$have_sha" ]; }; then
+      ready=$((ready + 1))
+      continue
+    fi
+    echo "fetch.sh: cached $name no longer matches corpus.tsv, fetching it again" >&2
+  fi
+  rm -f "$files/$name" "$files/$name.ok" "$files/$name.part"
   if ! curl -fsSL --limit-rate 20M --retry 5 --retry-delay 10 --retry-all-errors --connect-timeout 30 \
        -A "$ua" -o "$files/$name.part" "$url"; then
     echo "fetch.sh: cannot fetch $name from $url" >&2
@@ -51,11 +64,11 @@ while IFS="$tab" read -r name url licence sha size; do
   touch "$files/$name.ok"
   echo "fetched $name sha256=$got_sha size=$got_size licence=$licence"
   fetched=$((fetched + 1))
+  ready=$((ready + 1))
   # Be polite to the hosts: one request at a time with a short pause.
   sleep 1
 done < "$dir/corpus.rows"
 rm -f "$dir/corpus.rows"
 
-total=$(find "$files" -name '*.ok' | wc -l | tr -d ' ')
-echo "corpus: $total files ready, $fetched fetched now, $failed failed"
+echo "corpus: $ready files ready, $fetched fetched now, $failed failed"
 [ "$failed" -eq 0 ]
