@@ -114,8 +114,11 @@ fn version_only_payload_is_not_metadata() {
 
 #[test]
 fn metadata_values() {
-    let m =
-        Metadata::from_iso(&IsoMetadata::parse(&iso_common(false, 0), &limits()).unwrap()).unwrap();
+    let m = Metadata::from_iso(
+        &IsoMetadata::parse(&iso_common(false, 0), &limits()).unwrap(),
+        &limits(),
+    )
+    .unwrap();
     assert_eq!(m.base_hdr_headroom, 0.0);
     assert_eq!(m.alternate_hdr_headroom, 3.0);
     assert_eq!(m.gain_map_min, [0.0; 3]);
@@ -125,13 +128,19 @@ fn metadata_values() {
     assert_eq!(m.alternate_offset, [25f32 / 1000f32; 3]);
     assert!(m.use_base_colour_space && !m.multichannel && !m.backward_direction);
 
-    let m =
-        Metadata::from_iso(&IsoMetadata::parse(&iso_common(true, 0), &limits()).unwrap()).unwrap();
+    let m = Metadata::from_iso(
+        &IsoMetadata::parse(&iso_common(true, 0), &limits()).unwrap(),
+        &limits(),
+    )
+    .unwrap();
     assert!(m.multichannel);
     assert_eq!(m.gain_map_min, [0.0, 100f32 / 1000f32, 200f32 / 1000f32]);
 
-    let m =
-        Metadata::from_iso(&IsoMetadata::parse(&iso_separate(false), &limits()).unwrap()).unwrap();
+    let m = Metadata::from_iso(
+        &IsoMetadata::parse(&iso_separate(false), &limits()).unwrap(),
+        &limits(),
+    )
+    .unwrap();
     assert_eq!(m.base_hdr_headroom, 0.5);
     assert_eq!(m.alternate_hdr_headroom, 3.0);
     assert_eq!(m.gain_map_max, [2.0; 3]);
@@ -144,7 +153,7 @@ fn minimum_version_parses_but_is_unsupported() {
     let iso = IsoMetadata::parse(&iso_common(false, 1), &limits()).unwrap();
     assert_eq!(iso.minimum_version, 1);
     assert_eq!(
-        Metadata::from_iso(&iso),
+        Metadata::from_iso(&iso, &limits()),
         Err(Error::Unsupported("iso minimum_version"))
     );
 }
@@ -159,7 +168,7 @@ fn unknown_layout_keeps_the_header_only() {
     );
     assert_eq!(iso.base_hdr_headroom, f(0, 0));
     assert_eq!(
-        Metadata::from_iso(&iso),
+        Metadata::from_iso(&iso, &limits()),
         Err(Error::Unsupported("iso minimum_version"))
     );
     // Without the flags byte the flags read as 0.
@@ -179,7 +188,7 @@ fn zero_denominator_is_malformed() {
     bytes[9..13].copy_from_slice(&0u32.to_be_bytes());
     let iso = IsoMetadata::parse(&bytes, &limits()).unwrap();
     assert_eq!(
-        Metadata::from_iso(&iso),
+        Metadata::from_iso(&iso, &limits()),
         Err(Error::Malformed("iso-zero-denominator"))
     );
 }
@@ -190,5 +199,9 @@ fn backward_direction_flag_is_kept() {
     bytes[4] |= 0x04;
     let iso = IsoMetadata::parse(&bytes, &limits()).unwrap();
     assert!(iso.backward_direction());
-    assert!(Metadata::from_iso(&iso).unwrap().backward_direction);
+    assert!(
+        Metadata::from_iso(&iso, &limits())
+            .unwrap()
+            .backward_direction
+    );
 }

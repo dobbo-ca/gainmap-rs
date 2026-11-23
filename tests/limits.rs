@@ -173,3 +173,42 @@ fn nested_errors_are_mapped() {
     );
     assert_eq!(Error::from(isobmff::Error::Cancelled), Error::Cancelled);
 }
+
+/// An AVIF file with base 1, gain map 2 and `tmaps` `tmap` items that all link [1, 2], and one
+/// `altr` group per `groups` that holds the base. The primary is item 1, so no tmap is chosen.
+fn many_links(tmaps: u32, groups: u32) -> Vec<u8> {
+    let mut s = Heif::new(b"avif");
+    let size = s.prop(ispe(64, 48));
+    let small = s.prop(ispe(32, 24));
+    let cfg = s.prop(av1c());
+    s.item(1, b"av01", &[1; 4], &[size, cfg]);
+    s.item(2, b"av01", &[2; 4], &[small, cfg]);
+    for k in 0..tmaps {
+        s.item(10 + k, b"tmap", &tmap_payload(0), &[]);
+        s.link(b"dimg", 10 + k, &[1, 2]);
+    }
+    for k in 0..groups {
+        s.group(b"altr", 100 + k, &[1, 2]);
+    }
+    s.build()
+}
+
+#[test]
+fn images_bound_the_heif_gain_map_lookup() {
+    let l = Limits {
+        max_images: 2,
+        ..limits()
+    };
+    // At the limit: read.
+    assert!(gainmap::read(&many_links(2, 2), &l, &no_cancel()).is_ok());
+    // One `tmap` item too many.
+    assert_eq!(
+        gainmap::read(&many_links(3, 0), &l, &no_cancel()).map(|_| ()),
+        Err(Error::LimitExceeded(Limit::Images))
+    );
+    // One `altr` group too many.
+    assert_eq!(
+        gainmap::read(&many_links(0, 3), &l, &no_cancel()).map(|_| ()),
+        Err(Error::LimitExceeded(Limit::Images))
+    );
+}

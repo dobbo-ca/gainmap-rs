@@ -3,10 +3,10 @@
 use crate::budget::Budget;
 use crate::{Error, Limit};
 
-/// One MP entry. `offset` is relative to the MP endian field; 0 is the first image.
+/// One MP entry. `offset` is relative to the MP endian field; 0 is the first image. The size in
+/// the entry is not kept: a writer can get it wrong, and the walk of the image finds its EOI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MpEntry {
-    pub(crate) size: u32,
     pub(crate) offset: u32,
 }
 
@@ -94,8 +94,8 @@ pub(crate) fn parse(
             for i in 0..n {
                 let e = offset + i * 16;
                 match (r.u32(e + 4), r.u32(e + 8)) {
-                    (Some(size), Some(offset)) => {
-                        entries.push(MpEntry { size, offset });
+                    (Some(_), Some(offset)) => {
+                        entries.push(MpEntry { offset });
                     }
                     _ => return Err(Error::Malformed("mpf-entries")),
                 }

@@ -54,6 +54,16 @@ fn graph_cost(h: &Heif) -> usize {
         if let Ok(v) = &it.data {
             add(v.len().saturating_mul(size_of::<isobmff::Extent>()));
         }
+        // The parsed `grid` and `iovl` payloads are kept in the item. A `tmap` holds a fixed
+        // size record, which is part of `Item` itself.
+        match &it.derived {
+            Some(Ok(isobmff::Derived::Overlay(o))) => add(o
+                .inputs
+                .len()
+                .saturating_mul(size_of::<isobmff::OverlayInput>())),
+            Some(Ok(isobmff::Derived::Grid(g))) => add(g.tiles.len().saturating_mul(4)),
+            _ => {}
+        }
     }
     add(h
         .properties
@@ -99,13 +109,67 @@ fn graph_cost(h: &Heif) -> usize {
 }
 
 /// A bound for the Vecs that two live [`Heif::image`] results hold (the base image and one
-/// transient image): aux ids, thumbnails and grid tiles are each at most the `to` ids in the file.
+/// transient image): aux ids, thumbnails and grid tiles are each at most the `to` ids in the file;
+/// transforms and colours are at most the associations of one item; an overlay image holds a
+/// clone of the inputs of its item.
 fn image_cost(h: &Heif) -> usize {
     let to_total = h
         .references
         .iter()
         .fold(0usize, |n, r| n.saturating_add(r.to.len()));
-    to_total.saturating_mul(2 * (size_of::<isobmff::Aux>() + 3 * 4))
+    let (assoc, inputs) = h.items.iter().fold((0usize, 0usize), |(a, i), it| {
+        let n = match &it.derived {
+            Some(Ok(isobmff::Derived::Overlay(o))) => o.inputs.len(),
+            _ => 0,
+        };
+        (a.max(it.associations.len()), i.max(n))
+    });
+    let per_image = to_total
+        .saturating_mul(size_of::<isobmff::Aux>() + 3 * 4)
+        .saturating_add(
+            assoc.saturating_mul(size_of::<isobmff::Transform>() + size_of::<isobmff::Colour>()),
+        )
+        .saturating_add(inputs.saturating_mul(size_of::<isobmff::OverlayInput>()));
+    per_image.saturating_mul(2)
+}
+
+/// [`Heif::image`] looks for a gain map every time, and `isobmff` does that in time proportional
+/// to the `tmap` items that link `id` times the `altr` groups that hold it, with no cancel check.
+/// So before the call, count both in one linear pass each (with the cancel flag checked every
+/// 1024 steps) and fail with `Images` when either is over `max_images`.
+fn checked_image(
+    heif: &Heif,
+    id: u32,
+    limits: &Limits,
+    budget: &Budget<'_>,
+) -> Result<isobmff::Image, Error> {
+    let mut tmaps = 0usize;
+    for (i, r) in heif.references.iter().enumerate() {
+        if i.is_multiple_of(1024) {
+            budget.check_cancel()?;
+        }
+        if r.kind.0 == *b"dimg"
+            && r.to.contains(&id)
+            && heif
+                .item(r.from)
+                .is_some_and(|it| it.item_type.0 == *b"tmap")
+        {
+            tmaps += 1;
+        }
+    }
+    let mut groups = 0usize;
+    for (i, g) in heif.groups.iter().enumerate() {
+        if i.is_multiple_of(1024) {
+            budget.check_cancel()?;
+        }
+        if g.kind.0 == *b"altr" && g.entities.contains(&id) {
+            groups += 1;
+        }
+    }
+    if tmaps > limits.max_images || groups > limits.max_images {
+        return Err(Error::LimitExceeded(Limit::Images));
+    }
+    Ok(heif.image(id)?)
 }
 
 /// Errors that end the read instead of becoming an issue.
@@ -124,7 +188,12 @@ fn coded_of(config: &CodecConfig) -> (Codec, u8) {
 }
 
 /// The coded image of an image item; a grid reports the codec of its first tile.
-fn coded(heif: &Heif, img: &isobmff::Image) -> Result<CodedImage, Error> {
+fn coded(
+    heif: &Heif,
+    img: &isobmff::Image,
+    limits: &Limits,
+    budget: &Budget<'_>,
+) -> Result<CodedImage, Error> {
     let (codec, components, width, height) = match &img.kind {
         ImageKind::Coded { config, .. } => {
             let (codec, components) = coded_of(config);
@@ -132,7 +201,7 @@ fn coded(heif: &Heif, img: &isobmff::Image) -> Result<CodedImage, Error> {
         }
         ImageKind::Grid(g) => {
             let tile = g.tiles.first().ok_or(Error::Malformed("heif-grid"))?;
-            let tile = heif.image(*tile)?;
+            let tile = checked_image(heif, *tile, limits, budget)?;
             let ImageKind::Coded { config, .. } = &tile.kind else {
                 return Err(Error::Unsupported("heif-grid-tile"));
             };
@@ -176,8 +245,8 @@ pub(crate) fn read(
             .and_then(|r| r.to.first().copied())
             .ok_or(Error::Malformed("tmap-dimg"))?;
     }
-    let img = heif.image(base_id)?;
-    let base = coded(&heif, &img)?;
+    let img = checked_image(&heif, base_id, limits, budget)?;
+    let base = coded(&heif, &img, limits, budget)?;
     // The `tmap` link is found here, not taken from `img.gain_map`, so that a gain map whose
     // `tmap` is out of `altr` order or unreadable is kept. The Apple auxiliary image is isobmff's.
     let gain_map = match find_tmap(&heif, base_id, budget)? {
@@ -362,10 +431,8 @@ fn read_gain_map(
     budget: &Budget<'_>,
 ) -> Result<GainMap, Error> {
     let mut issues: Vec<&'static str> = Vec::new();
-    let image = match heif
-        .image(gm.image)
-        .map_err(Error::from)
-        .and_then(|i| coded(heif, &i))
+    let image = match checked_image(heif, gm.image, limits, budget)
+        .and_then(|i| coded(heif, &i, limits, budget))
     {
         Ok(c) => c,
         Err(e) if fatal(&e) => return Err(e),
@@ -436,7 +503,7 @@ fn read_gain_map(
     };
     xmp::release(budget, pxmp);
 
-    let metadata = resolve_metadata(iso.as_ref(), hdrgm.as_ref(), &mut issues);
+    let metadata = resolve_metadata(iso.as_ref(), hdrgm.as_ref(), limits, &mut issues);
     let kind = match gm.source {
         GainMapSource::Tmap => Kind::Iso,
         GainMapSource::Apple => Kind::Apple,

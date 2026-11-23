@@ -37,9 +37,8 @@
 //! # Resource limits
 //!
 //! [`read`], [`decode`] and [`GainMapImage::coded_bytes`] take [`Limits`] and a cancel flag
-//! (`&AtomicBool`). [`IsoMetadata::parse`] takes [`Limits`] only (it allocates nothing and is
-//! bounded by its input). [`Metadata::from_iso`] and [`Metadata::from_xmp`] convert values that
-//! are already in memory and take neither.
+//! (`&AtomicBool`). [`IsoMetadata::parse`], [`Metadata::from_iso`] and [`Metadata::from_xmp`] take
+//! [`Limits`] only (they allocate nothing and are bounded by their input).
 //!
 //! - `max_alloc` (default 1 GiB) is the enforced peak of the working memory of one call,
 //!   including the nested calls into `jpeg`, `exif` and `isobmff`, which run under what is left.
@@ -149,7 +148,7 @@ pub mod __fuzz {
         };
         let hdrgm = crate::xmp::hdrgm_from_xmp(&parsed.xmp, &budget)?;
         if let Some(h) = &hdrgm {
-            let _ = Metadata::from_xmp(h);
+            let _ = Metadata::from_xmp(h, limits);
         }
         Ok(hdrgm)
     }

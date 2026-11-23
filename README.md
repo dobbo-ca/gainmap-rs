@@ -37,7 +37,7 @@ Details: [docs/limits.md](docs/limits.md).
 | `max_pixels` | 2^30 | pixels per image | `Pixels` |
 | `max_xmp_bytes` | 16 MiB | bytes | `XmpBytes` |
 | `max_segments` | 100 000 | JPEG markers per image | `Segments` |
-| `max_images` | 64 | MPF entries and candidate images | `Images` |
+| `max_images` | 64 | MPF entries, candidate images, HEIF `tmap` items and `altr` groups per image | `Images` |
 
 - `max_alloc` is the enforced peak, including the nested calls into jpeg-rs, exif-rs and
   isobmff-rs, which run under what is left. jpeg-rs reads a `max_alloc` of exactly 1 GiB as its

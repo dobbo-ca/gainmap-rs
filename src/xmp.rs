@@ -33,13 +33,18 @@ pub(crate) fn parse(
         Ok(xmp) => {
             // Counts the capacity exif holds (a value keeps the room of its raw span even when
             // entities shrink it), not the length. exif also reserves a slot for a property it
-            // then leaves out as not UTF-8; those slots cannot be seen from here.
-            let props = xmp.properties().iter().fold(0usize, |sum, p| {
-                sum.saturating_add(size_of::<exif::Property>())
-                    .saturating_add(p.ns.capacity())
-                    .saturating_add(p.name.capacity())
-                    .saturating_add(p.value.capacity())
-            });
+            // then leaves out as not UTF-8, and its Vec is not visible from here. So the slots
+            // are charged at the length rounded up to the next power of two: an upper bound for
+            // a Vec that grew by doubling, and a guess when exif reserved the exact count.
+            let slots = xmp.properties().len().next_power_of_two();
+            let props = xmp.properties().iter().fold(
+                slots.saturating_mul(size_of::<exif::Property>()),
+                |sum, p| {
+                    sum.saturating_add(p.ns.capacity())
+                        .saturating_add(p.name.capacity())
+                        .saturating_add(p.value.capacity())
+                },
+            );
             let cost = xmp.raw().len().saturating_add(props);
             budget.charge(cost)?;
             Ok(Some(Parsed { xmp, cost }))
@@ -68,11 +73,12 @@ pub(crate) fn release(budget: &Budget<'_>, parsed: Option<Parsed>) {
     }
 }
 
-/// The packet describes a gain map image: any `hdrgm` property (a packet without `GainMapMax`
-/// still counts, so the read keeps the image and reports `xmp-missing-gainmapmax`) or any Apple
-/// `HDRGainMap` property.
+/// The packet describes a gain map image: any `hdrgm` property other than `Version` (a packet
+/// without `GainMapMax` still counts, so the read keeps the image and reports
+/// `xmp-missing-gainmapmax`) or any Apple `HDRGainMap` property. `hdrgm:Version` alone marks a
+/// primary image.
 pub(crate) fn is_gain_map(xmp: &exif::Xmp) -> bool {
-    xmp.hdrgm().next().is_some() || has_apple(xmp)
+    xmp.hdrgm().any(|p| p.name != "Version") || has_apple(xmp)
 }
 
 /// The text of `hdrgm:Version`.
@@ -180,7 +186,7 @@ impl Metadata {
     /// [`Error::Malformed`] with the token `xmp-missing-gainmapmax`,
     /// `xmp-missing-hdrcapacitymax`, `xmp-bad-count` (a sequence of 2 or more than 3 values) or
     /// `xmp-bad-number`.
-    pub fn from_xmp(xmp: &HdrgmXmp) -> Result<Metadata, Error> {
+    pub fn from_xmp(xmp: &HdrgmXmp, _limits: &Limits) -> Result<Metadata, Error> {
         if xmp.gain_map_max.is_empty() {
             return Err(Error::Malformed("xmp-missing-gainmapmax"));
         }

@@ -1,8 +1,7 @@
 # Limits
 
 `Limits` (src/limits.rs) has public fields and a finite `Default`. `read`, `decode` and `GainMapImage::coded_bytes` take `&Limits` and a `&AtomicBool` cancel flag;
-`IsoMetadata::parse` takes `&Limits` only (it allocates nothing and reads at most its input).
-`Metadata::from_iso` and `Metadata::from_xmp` convert values already in memory and take neither.
+`IsoMetadata::parse`, `Metadata::from_iso` and `Metadata::from_xmp` take `&Limits` only (they allocate nothing and read at most their input).
 A limit gives `Error::LimitExceeded(Limit::X)`; its class token (the
 parity oracle writes it) is `limit-<field>`.
 
@@ -13,7 +12,7 @@ parity oracle writes it) is `limit-<field>`.
 | `max_pixels` | 2^30 | pixels per image | `Pixels` | `limit-pixels` | `read` for JPEG (the SOF of the base and of the chosen gain map, src/jpeg/mod.rs), `jpeg` in `decode` (from the SOF, before any allocation) and `isobmff` (`ispe`) |
 | `max_xmp_bytes` | 16 MiB | bytes | `XmpBytes` | `limit-xmp-bytes` | `exif::Xmp::parse`; the size of a HEIF XMP item before it is read. exif's own XML node limit is reported as this error too |
 | `max_segments` | 100 000 | JPEG markers outside entropy data, per image | `Segments` | `limit-segments` | src/jpeg/scan.rs, per segment, TEM or RST marker and fill byte (restart markers inside entropy data are not counted) |
-| `max_images` | 64 | MPF entries; candidate images | `Images` | `limit-images` | src/jpeg/mpf.rs from the entry count, before the entries are read; the candidate list |
+| `max_images` | 64 | MPF entries; candidate images; HEIF `tmap` items that link an image and `altr` groups that hold it | `Images` | `limit-images` | src/jpeg/mpf.rs from the entry count, before the entries are read; the candidate list; src/heif.rs before each `Heif::image` call (one pass over the references and groups, cancel checked every 1024 steps), because `isobmff` looks for a gain map in time proportional to their product |
 
 The other errors are not limits: `UnknownFormat`, `Truncated`, `Malformed(token)`,
 `Unsupported(token)`, `OutOfMemory` (the allocator refused a size within the limits), `Cancelled`,
@@ -35,8 +34,8 @@ per public call:
 - `remaining()` is passed down: `exif::Limits.max_alloc`, `isobmff::Limits.max_alloc` and
   `jpeg::Limits.max_alloc` are what is left when the nested call starts. The pieces a nested call
   returns are charged when they come back: the parsed XMP (its raw bytes and properties), the
-  HEIF graph (a size estimate from its item, extent, property, reference and group counts), the
-  decoded base pixels.
+  HEIF graph (a size estimate from its item, extent, overlay input, property, reference and group
+  counts), the decoded base pixels.
 
 What is charged: the XMP packet and its properties, the `hdrgm` strings of the result, the
 container items, the MPF entries, the candidate list, the HEIF graph, item bytes that need a copy,

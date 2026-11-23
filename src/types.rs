@@ -230,17 +230,18 @@ pub struct Decoded {
 pub(crate) fn resolve_metadata(
     iso: Option<&IsoMetadata>,
     xmp: Option<&HdrgmXmp>,
+    limits: &Limits,
     issues: &mut Vec<&'static str>,
 ) -> Option<Metadata> {
     if let Some(iso) = iso {
-        match Metadata::from_iso(iso) {
+        match Metadata::from_iso(iso, limits) {
             Ok(m) => return Some(m),
             Err(Error::Malformed(token)) => issues.push(token),
             Err(_) => issues.push("iso-minimum-version"),
         }
     }
     if let Some(xmp) = xmp {
-        match Metadata::from_xmp(xmp) {
+        match Metadata::from_xmp(xmp, limits) {
             Ok(m) => return Some(m),
             Err(Error::Malformed(token)) => issues.push(token),
             Err(_) => issues.push("xmp-invalid"),

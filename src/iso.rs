@@ -234,7 +234,7 @@ impl Metadata {
     /// [`Error::Unsupported`]`("iso minimum_version")` when `minimum_version` is not 0;
     /// [`Error::Malformed`]`("iso-zero-denominator")` when any denominator is 0;
     /// [`Error::Malformed`]`("iso-gamma-zero")` when a gamma is 0 (the decode would divide by it).
-    pub fn from_iso(iso: &IsoMetadata) -> Result<Metadata, Error> {
+    pub fn from_iso(iso: &IsoMetadata, _limits: &Limits) -> Result<Metadata, Error> {
         if iso.minimum_version != 0 {
             return Err(Error::Unsupported("iso minimum_version"));
         }
