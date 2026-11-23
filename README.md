@@ -26,7 +26,8 @@ if let Some(gm) = &image.gain_map {
 
 ## Resource limits
 
-Every call takes `&Limits` and a cancel flag (`&AtomicBool`); there is no unlimited entry point.
+`read`, `decode` and `GainMapImage::coded_bytes` take `&Limits` and a cancel flag (`&AtomicBool`);
+`IsoMetadata::parse` takes `&Limits` only. There is no unlimited entry point.
 Details: [docs/limits.md](docs/limits.md).
 
 | Field | Default | Unit | Error (`Limit::...`) |
@@ -36,10 +37,12 @@ Details: [docs/limits.md](docs/limits.md).
 | `max_pixels` | 2^30 | pixels per image | `Pixels` |
 | `max_xmp_bytes` | 16 MiB | bytes | `XmpBytes` |
 | `max_segments` | 100 000 | JPEG markers per image | `Segments` |
-| `max_images` | 64 | MPF entries and candidate images | `Images` |
+| `max_images` | 64 | MPF entries, candidate images, HEIF `tmap` items and `altr` groups per image | `Images` |
 
 - `max_alloc` is the enforced peak, including the nested calls into jpeg-rs, exif-rs and
-  isobmff-rs, which run under what is left.
+  isobmff-rs, which run under what is left. jpeg-rs reads a `max_alloc` of exactly 1 GiB as its
+  unset default and may exceed it by page rounding, so `decode` passes it 1 GiB minus one byte
+  instead; the cap is hard for every value.
 - `max_threads = 1` spawns no thread. `read` never spawns one; `decode` passes the value to
   jpeg-rs.
 - Set the cancel flag from another thread: the call returns `Error::Cancelled`.

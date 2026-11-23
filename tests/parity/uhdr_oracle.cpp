@@ -3,6 +3,7 @@
 // Never built on a developer machine and never a dependency of the crate (docs/parity.md).
 //
 //   uhdr_oracle <in-dir> <out-dir> [--no-raw]
+//   uhdr_oracle decode <in.jpg> <out.raw>
 //
 // For every regular file <f> of <in-dir> (sorted) it writes <out-dir>/<f>.txt and, when
 // libultrahdr finds a base image and a gain map, <f>.base.jpg and <f>.gm.jpg (the bytes of
@@ -144,6 +145,14 @@ static Result process(const std::vector<uint8_t>& data) {
 }
 
 int main(int argc, char** argv) {
+  // uhdr_oracle decode <in.jpg> <out.raw>: one JPEG through decode_jpeg (the fallback channel of
+  // run.sh for a file libultrahdr cannot read). Writes nothing and exits 1 on failure.
+  if (argc == 4 && strcmp(argv[1], "decode") == 0) {
+    std::vector<uint8_t> jpg, px;
+    int ch = 0;
+    if (!read_file(argv[2], &jpg) || !decode_jpeg(jpg.data(), jpg.size(), &px, &ch)) return 1;
+    return write_file(argv[3], px.data(), px.size()) ? 0 : 1;
+  }
   if (argc < 3) {
     fprintf(stderr, "usage: uhdr_oracle <in-dir> <out-dir> [--no-raw]\n");
     return 2;

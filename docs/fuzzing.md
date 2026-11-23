@@ -23,9 +23,15 @@ The `mpf`, `xmp` and `scan` entry points are in the `#[doc(hidden)] pub mod __fu
 There are no binary fixtures in git. `tests/fuzz/make-seeds.sh <dir>` writes the seeds with
 `printf`, byte by byte: Ultra HDR JPEGs with MPF in both byte orders, with the Google container
 only, with the gain map just after the primary image, with XMP `rdf:Seq`, with an ISO payload
-only, and truncated ones; a JPEG without a gain map; a small AVIF with a `tmap` item; ISO
-payloads (one channel, three channels, common denominator, truncated); MPF payloads; XMP
-packets (attributes, `rdf:Seq`, Apple, garbage). The image data of every JPEG is a 1x1 grey
+only, and truncated ones; a JPEG without a gain map; a small AVIF with a `tmap` item, and the
+same with an XMP item (`mime`, `application/rdf+xml`, `cdsc` to the base image); an iPhone-style
+HEIC (`hvc1` primary, an `hvc1` auxiliary image with `auxC`
+`urn:com:apple:photo:2020:aux:hdrgainmap` and an `auxl` reference, and two XMP items: `hdrgm`
+version for the primary, Apple `HDRGainMap` for the gain map). These reach the Apple gain-map
+source, the XMP item size check and the primary-version read of the HEIF reader, which no
+mutation of the AVIF seed would build (the `auxC` URN alone is 40 bytes). The AVIF and HEIC seeds
+go to `read/` and `decode/`. The other targets get ISO payloads (one channel, three channels,
+common denominator, truncated); MPF payloads; XMP packets (attributes, `rdf:Seq`, Apple, garbage). The image data of every JPEG is a 1x1 grey
 baseline image, so the seeds decode. The fuzz stage of the CI image runs it with `/seeds`.
 
 ## CI

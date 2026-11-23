@@ -6,7 +6,8 @@ use crate::budget::Budget;
 use crate::types::resolve_metadata;
 use crate::xmp::{self, Parsed};
 use crate::{
-    Codec, CodedImage, Container, Error, GainMap, GainMapImage, IsoMetadata, Kind, Limits, Location,
+    Codec, CodedImage, Container, Error, GainMap, GainMapImage, IsoMetadata, Kind, Limit, Limits,
+    Location,
 };
 
 pub(crate) mod mpf;
@@ -16,8 +17,6 @@ pub(crate) mod scan;
 #[derive(Debug, Clone, Copy)]
 struct Cand {
     start: usize,
-    /// The input is cut here for the walk of this candidate.
-    end: usize,
     /// The container directory names it a gain map.
     semantic: bool,
 }
@@ -31,6 +30,14 @@ struct Found {
     issues: Vec<&'static str>,
 }
 
+/// Fails when the frame has more pixels than `limits.max_pixels`.
+fn check_pixels(sof: &scan::Sof, limits: &Limits) -> Result<(), Error> {
+    if u64::from(sof.width) * u64::from(sof.height) > limits.max_pixels {
+        return Err(Error::LimitExceeded(Limit::Pixels));
+    }
+    Ok(())
+}
+
 /// `data` is a JPEG (it starts with SOI).
 pub(crate) fn read(
     data: &[u8],
@@ -39,6 +46,7 @@ pub(crate) fn read(
 ) -> Result<GainMapImage, Error> {
     let primary = scan::scan(data, 0, limits, budget)?;
     let sof = primary.sof.ok_or(Error::Malformed("jpeg-no-sof"))?;
+    check_pixels(&sof, limits)?;
     let base = CodedImage {
         codec: Codec::Jpeg,
         width: sof.width,
@@ -87,28 +95,22 @@ pub(crate) fn read(
         .saturating_add(1)
         .min(limits.max_images);
     let mut cands = budget.vec::<Cand>(cap)?;
-    let mut add = |start: Option<usize>, end: usize, semantic: bool| {
-        if let Some(start) = start
-            && cands.len() < cap
-        {
-            cands.push(Cand {
-                start,
-                end,
-                semantic,
-            });
+    let mut add = |start: Option<usize>, semantic: bool| {
+        let Some(start) = start else { return };
+        // The same start from two locators is one candidate (it keeps the semantic hint).
+        if let Some(c) = cands.iter_mut().find(|c| c.start == start) {
+            c.semantic |= semantic;
+        } else if cands.len() < cap {
+            cands.push(Cand { start, semantic });
         }
     };
-    // (a) MPF entries after the first.
+    // (a) MPF entries after the first. The entry size is not used: the walk of the candidate
+    // finds its EOI, and a size that is too small must not cut the image short.
     for e in entries.iter().skip(1).filter(|e| e.offset != 0) {
         let start = usize::try_from(e.offset)
             .ok()
             .and_then(|o| mpf_base.checked_add(o));
-        let end = start
-            .zip(usize::try_from(e.size).ok().filter(|&s| s > 0))
-            .and_then(|(s, size)| s.checked_add(size))
-            .filter(|&end| end <= data.len())
-            .unwrap_or(data.len());
-        add(start, end, false);
+        add(start, false);
     }
     // (b) The container directory: items after the primary, in order.
     if let Some((index, first)) = items.iter().enumerate().find(|(_, i)| i.primary) {
@@ -117,7 +119,7 @@ pub(crate) fn read(
             .and_then(|pad| primary.end.checked_add(pad));
         for item in items.iter().skip(index + 1) {
             let Some(start) = pos else { break };
-            add(Some(start), data.len(), item.gain_map);
+            add(Some(start), item.gain_map);
             pos = item
                 .length
                 .and_then(|l| usize::try_from(l).ok())
@@ -131,7 +133,7 @@ pub(crate) fn read(
     }
     // (c) The JPEG right after the primary image.
     if primary_version.is_some() || primary.iso.is_some() {
-        add(Some(primary.end), data.len(), false);
+        add(Some(primary.end), false);
     }
 
     let mut chosen: Option<Found> = None;
@@ -141,10 +143,7 @@ pub(crate) fn read(
         if c.start < primary.end {
             continue;
         }
-        let Some(slice) = data.get(..c.end) else {
-            continue;
-        };
-        let walked = match scan::scan(slice, c.start, limits, budget) {
+        let walked = match scan::scan(data, c.start, limits, budget) {
             Ok(s) => s,
             Err(Error::Malformed(_) | Error::Truncated) => continue,
             Err(e) => return Err(e),
@@ -192,6 +191,7 @@ pub(crate) fn read(
             });
         }
     };
+    check_pixels(&found.sof, limits)?;
     issues.extend(found.issues.iter().copied());
 
     let iso = match found
@@ -201,7 +201,7 @@ pub(crate) fn read(
         .and_then(|r| data.get(r))
         .filter(|p| p.len() > 4)
     {
-        Some(payload) => match IsoMetadata::parse(payload) {
+        Some(payload) => match IsoMetadata::parse(payload, limits) {
             Ok(iso) => Some(iso),
             Err(_) => {
                 issues.push("iso-truncated");
@@ -220,7 +220,7 @@ pub(crate) fn read(
     xmp::release(budget, pxmp);
     xmp::release(budget, found.xmp);
 
-    let metadata = resolve_metadata(iso.as_ref(), hdrgm.as_ref(), &mut issues);
+    let metadata = resolve_metadata(iso.as_ref(), hdrgm.as_ref(), limits, &mut issues);
     let kind = if primary_version.is_some() || hdrgm.is_some() {
         Kind::UltraHdr
     } else if found.scan.iso.is_some() {

@@ -2,7 +2,7 @@
 
 ## Crate dependencies
 
-All three are owner crates, git dependencies pinned by rev in Cargo.toml.
+Three direct dependencies, all owner crates, git dependencies pinned by rev in Cargo.toml.
 
 | Crate | Source | Why |
 |---|---|---|
@@ -10,9 +10,19 @@ All three are owner crates, git dependencies pinned by rev in Cargo.toml.
 | `exif` | `dobbo-ca/exif-rs` | XMP packet parse (`Xmp::parse`): the `hdrgm`, Apple `HDRGainMap` and container properties as text. |
 | `isobmff` | `dobbo-ca/isobmff-rs` | HEIF and AVIF boxes: items, `iref`, `altr` groups, `auxC`, item data, and which item is the gain map. The `tmap` payload is read by src/iso.rs, the same parser as for JPEG. |
 
-Nothing else: no C dependency, no `-sys` crate, no `cc`/`bindgen`, no proc macro, no XML crate.
+## Transitive dependencies
+
+These are in Cargo.lock because of the three crates above. gainmap does not use them directly.
+
+| Crate | Pulled in by | Why |
+|---|---|---|
+| `deflate` (`dobbo-ca/deflate-rs`, git, rev pinned) | `exif` | zlib inflate for PNG `zTXt` and compressed `iTXt` chunks. gainmap reads JPEG and HEIF only, so this code is never reached from here; it is built because `exif` has it as an unconditional dependency. Private repository, so CI fetches it with the same token. |
+| `rayon` 1.12.0 | `jpeg` | The worker pool of the threaded decode (restart bands, colour stripes). It is a thread-pool crate: the pool belongs to `jpeg`, gainmap starts no thread of its own, and `max_threads = 1` never touches it (docs/threading.md). `jpeg` pins it exactly. |
+| `rayon-core` 1.13.0, `crossbeam-deque` 0.8.8, `crossbeam-epoch` 0.9.21, `crossbeam-utils` 0.8.23, `either` 1.19.0 | `rayon` | The work-stealing deque, its memory reclamation and helpers. Registry crates; no choice, they are rayon's own dependencies. |
+
+No C dependency, no `-sys` crate, no `cc`/`bindgen`, no proc macro, no XML crate.
 CI fetches the private git dependencies with the `dobbo-ca-ci-read` GitHub App token
-(`repositories: jpeg-rs,exif-rs,isobmff-rs`), as in conventions.
+(`repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs`), as in conventions.
 
 ## Ported code
 

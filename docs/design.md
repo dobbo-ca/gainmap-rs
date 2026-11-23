@@ -47,9 +47,12 @@ in this order, at most `max_images`, and each one must start with an SOI:
    plus the primary padding plus the length and padding of each earlier item.
 3. The JPEG right after the primary EOI, when the primary has `hdrgm:Version` or an ISO APP2.
 
-The first candidate whose own XMP has `hdrgm:GainMapMax` or an Apple `HDRGainMap` property, or
-whose ISO APP2 holds more than the 4 version bytes, is the gain map. If there is none, the first
-candidate that the container directory marks `GainMap` is used. Else the file has no gain map.
+The end of a candidate is where its own walk finds the EOI; the MPF entry size is not used, so a
+size that is too small does not drop the gain map. The first candidate whose own XMP has an
+`hdrgm` property other than `Version` (`Version` alone marks a primary image) or an Apple
+`HDRGainMap` property, or whose ISO APP2 holds more than the 4 version bytes, is the gain map. If
+there is none, the first candidate that the container directory marks `GainMap` is used. Else the
+file has no gain map.
 
 `exif::Xmp` reports only the attributes of `rdf:Description`, and the directory items carry
 `Item:Semantic`, `Item:Length` and `Item:Padding` as attributes of `Container:Item`, so
@@ -82,9 +85,9 @@ when the primary or the gain-map XMP has `hdrgm`, else `Iso` when there is an IS
 When a gain-map image is found but its metadata is missing or invalid, `read` still returns
 `Some(GainMap)` with `metadata: None` and the reasons in `issues`. A bad XMP packet is the issue
 `xmp-malformed`, not an error. The issue tokens are stable: `iso-minimum-version`,
-`iso-truncated`, `iso-zero-denominator`, `xmp-missing-gainmapmax`, `xmp-missing-hdrcapacitymax`,
+`iso-truncated`, `iso-zero-denominator`, `iso-gamma-zero`, `xmp-missing-gainmapmax`, `xmp-missing-hdrcapacitymax`,
 `xmp-bad-count`, `xmp-bad-number`, `xmp-malformed`, `mpf-malformed`, `tmap-version`,
-`tmap-unreadable`, `xmp-unreadable`, `gainmap-image-unreadable`, `metadata-missing`. Only a limit,
+`tmap-not-preferred`, `tmap-too-large`, `tmap-unreadable`, `xmp-unreadable`, `gainmap-image-unreadable`, `metadata-missing`. Only a limit,
 an allocation failure or the cancel flag ends `read` early.
 
 ## Decode

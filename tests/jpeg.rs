@@ -329,3 +329,113 @@ fn truncated_and_damaged_files_never_panic() {
         }
     }
 }
+
+#[test]
+fn never_drop_xmp_without_gainmapmax() {
+    // Version and HDRCapacityMax but no GainMapMax, found through the fallback locator.
+    let xml = xmp_doc(
+        HDRGM_DECL,
+        "hdrgm:Version=\"1.0\" hdrgm:HDRCapacityMax=\"3\"",
+        "",
+    );
+    let g = kept(&[app1_xmp(&xml)]);
+    assert!(g.metadata.is_none() && g.xmp.is_some());
+    assert_eq!(g.issues, vec!["xmp-missing-gainmapmax"]);
+}
+
+#[test]
+fn read_checks_max_pixels_of_both_images() {
+    let l = gainmap::Limits {
+        max_pixels: 100,
+        ..limits()
+    };
+    // Base 16x16 = 256 pixels.
+    let b = with_mpf(&primary_segs(), &jpeg_rgb(16, 16), &gm_std(), true);
+    assert_eq!(
+        gainmap::read(&b.file, &l, &no_cancel()).map(|_| ()),
+        Err(Error::LimitExceeded(Limit::Pixels))
+    );
+    // Base 8x8 = 64 pixels fits; the gain map 16x16 does not.
+    let gm = with_segments(&jpeg_gray(16, 16), &[app1_xmp(&gm_xmp("2", "2.5"))]);
+    let b = with_mpf(&primary_segs(), &jpeg_rgb(8, 8), &gm, true);
+    assert_eq!(
+        gainmap::read(&b.file, &l, &no_cancel()).map(|_| ()),
+        Err(Error::LimitExceeded(Limit::Pixels))
+    );
+}
+
+#[test]
+fn fill_bytes_and_tem_markers_count_as_segments() {
+    let l = gainmap::Limits {
+        max_segments: 10,
+        ..limits()
+    };
+    let base = jpeg_rgb(16, 16);
+    let mut fill = base[..2].to_vec();
+    fill.extend_from_slice(&[0xFF; 50]);
+    fill.extend_from_slice(&base[2..]);
+    assert_eq!(
+        gainmap::__fuzz::jpeg_scan(&fill, &l),
+        Err(Error::LimitExceeded(Limit::Segments))
+    );
+    let mut tem = base[..2].to_vec();
+    tem.extend_from_slice(&[0xFF, 0x01].repeat(50));
+    tem.extend_from_slice(&base[2..]);
+    assert_eq!(
+        gainmap::__fuzz::jpeg_scan(&tem, &l),
+        Err(Error::LimitExceeded(Limit::Segments))
+    );
+    // The unmodified image is under the limit of a normal run.
+    assert!(gainmap::__fuzz::jpeg_scan(&base, &limits()).is_ok());
+}
+
+#[test]
+fn minimum_version_with_another_layout_is_not_truncated() {
+    let g = kept(&[app2_iso(&[0, 1, 0, 1, 0x48])]);
+    assert!(g.metadata.is_none());
+    assert_eq!(g.issues, vec!["iso-minimum-version"]);
+}
+
+#[test]
+fn mpf_size_smaller_than_the_image_keeps_the_gain_map() {
+    // The MPF entry has the right offset but a size that ends inside the gain-map JPEG. The
+    // image end comes from its own EOI, so the gain map is still found.
+    let gm = gm_std();
+    let segs = primary_segs();
+    let base = jpeg_rgb(16, 16);
+    let mut with_index = segs.clone();
+    with_index.push(mpf_seg(true, &[(0x30000, 0, 0), (0, 0, 0)]));
+    let primary_len = with_segments(&base, &with_index).len();
+    let endian_pos = 2 + segs.iter().map(Vec::len).sum::<usize>() + 8;
+    let index = mpf_seg(
+        true,
+        &[
+            (0x30000, primary_len as u32, 0),
+            (0, 20, (primary_len - endian_pos) as u32),
+        ],
+    );
+    let mut with_index = segs;
+    with_index.push(index);
+    let mut file = with_segments(&base, &with_index);
+    assert_eq!(file.len(), primary_len);
+    file.extend_from_slice(&gm);
+    let g = read(&file).unwrap().gain_map.unwrap();
+    assert_eq!(g.image.location, range(primary_len..file.len()));
+    assert!(g.metadata.is_some());
+}
+
+#[test]
+fn version_only_xmp_is_not_a_gain_map() {
+    // Entry 1 carries only `hdrgm:Version` (a primary image); entry 2 is the real gain map.
+    let version_only = with_segments(&jpeg_gray(8, 8), &[app1_xmp(&primary_xmp())]);
+    let gm = gm_std();
+    let b = with_mpf_many(
+        &primary_segs(),
+        &jpeg_rgb(16, 16),
+        &[&version_only[..], &gm[..]],
+        true,
+    );
+    let g = read(&b.file).unwrap().gain_map.unwrap();
+    assert_eq!(g.image.location, range(b.starts[1]..b.starts[1] + gm.len()));
+    assert!(g.metadata.is_some());
+}

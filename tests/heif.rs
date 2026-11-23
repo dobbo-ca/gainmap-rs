@@ -102,3 +102,98 @@ fn damaged_files_never_panic() {
     // An ftyp box and nothing else.
     assert!(read(&bx(b"ftyp", b"avif\0\0\0\0avif")).is_err());
 }
+
+#[test]
+fn primary_version_from_the_base_image_xmp() {
+    // avif_tmap, plus an XMP item 4 on the base image (1) with hdrgm:Version.
+    let mut s = Heif::new(b"avif");
+    s.primary = 3;
+    let size = s.prop(ispe(64, 48));
+    let small = s.prop(ispe(32, 24));
+    let cfg = s.prop(av1c());
+    s.item(1, b"av01", &[1; 4], &[size, cfg]);
+    s.item(2, b"av01", &[2; 4], &[small, cfg]);
+    s.item(3, b"tmap", &tmap_payload(0), &[]);
+    s.xmp_item(4, &primary_xmp());
+    s.link(b"dimg", 3, &[1, 2]);
+    s.link(b"cdsc", 4, &[1]);
+    s.group(b"altr", 100, &[3, 1]);
+    let g = read(&s.build()).unwrap().gain_map.unwrap();
+    assert_eq!(g.primary_version.as_deref(), Some("1.0"));
+    assert!(g.issues.is_empty(), "{:?}", g.issues);
+}
+
+#[test]
+fn tmap_after_the_base_in_altr_keeps_the_gain_map() {
+    let g = read(&avif_tmap_custom(&tmap_payload(0), &[1, 3]))
+        .unwrap()
+        .gain_map
+        .unwrap();
+    assert_eq!(g.kind, Kind::Iso);
+    assert_eq!(g.image.location, Location::Item(2));
+    assert!(g.metadata.is_some());
+    assert_eq!(g.issues, vec!["tmap-not-preferred"]);
+}
+
+#[test]
+fn bad_tmap_payload_keeps_the_gain_map() {
+    // The version byte, then too few bytes for the ISO payload.
+    let g = read(&avif_tmap_custom(&[0, 0, 0], &[3, 1]))
+        .unwrap()
+        .gain_map
+        .unwrap();
+    assert!(g.metadata.is_none() && g.iso.is_none());
+    assert_eq!(g.image.location, Location::Item(2));
+    assert!(g.issues.contains(&"iso-truncated"), "{:?}", g.issues);
+
+    // A payload over the cap is not read at all.
+    let g = read(&avif_tmap_custom(&[0; 5000], &[3, 1]))
+        .unwrap()
+        .gain_map
+        .unwrap();
+    assert!(g.metadata.is_none() && g.iso.is_none());
+    assert_eq!(g.issues, vec!["tmap-too-large", "metadata-missing"]);
+}
+
+#[test]
+fn gamma_zero_keeps_the_gain_map() {
+    // The gamma numerator of the one channel: version 1, header 5, denominators 12, min and max 8.
+    let mut payload = tmap_payload(0);
+    payload[26..30].fill(0);
+    let g = read(&avif_tmap_custom(&payload, &[3, 1]))
+        .unwrap()
+        .gain_map
+        .unwrap();
+    assert!(g.iso.is_some() && g.metadata.is_none());
+    assert!(g.issues.contains(&"iso-gamma-zero"), "{:?}", g.issues);
+}
+
+#[test]
+fn multi_extent_xmp_copy_is_charged() {
+    // heic_apple with an XMP item of about 64 KiB split in two extents: the copy that
+    // `item_bytes` makes must count against `max_alloc` while the XMP is parsed.
+    let xmp = format!("{}{}", apple_xmp(), " ".repeat(64 * 1024));
+    let mut s = Heif::new(b"heic");
+    let size = s.prop(ispe(64, 48));
+    let small = s.prop(ispe(32, 24));
+    let cfg = s.prop(hvcc());
+    let aux = s.prop(auxc(APPLE_AUX));
+    s.item(1, b"hvc1", &[1; 4], &[size, cfg]);
+    s.item(2, b"hvc1", &[2; 4], &[small, cfg, aux]);
+    s.xmp_item(3, &xmp).split(3, 2);
+    s.link(b"auxl", 2, &[1]);
+    s.link(b"cdsc", 3, &[2]);
+    let data = s.build();
+
+    let l = gainmap::Limits {
+        max_alloc: xmp.len() * 3 / 2,
+        ..limits()
+    };
+    assert!(matches!(
+        gainmap::read(&data, &l, &no_cancel()),
+        Err(gainmap::Error::LimitExceeded(gainmap::Limit::Alloc))
+    ));
+    // With the default budget the same file reads.
+    let g = read(&data).unwrap().gain_map.unwrap();
+    assert_eq!(g.apple.unwrap().headroom.as_deref(), Some("4.5"));
+}

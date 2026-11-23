@@ -5,10 +5,11 @@
 mod common;
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use common::*;
 use gainmap::{Error, Limit, Limits};
@@ -20,9 +21,33 @@ static PEAK: AtomicUsize = AtomicUsize::new(0);
 
 struct Counting;
 
+// Which threads allocate while `TRACK` is set: each thread takes a slot number on its first
+// allocation and sets that bit in `SEEN`. A thread that does work for `decode` allocates (its
+// own buffers, its job state), so the number of set bits is the number of threads that ran it.
+static TRACK: AtomicBool = AtomicBool::new(false);
+static SEEN: AtomicU64 = AtomicU64::new(0);
+static NEXT_SLOT: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    // Const-initialised with no destructor, so the allocator can touch it without allocating.
+    static SLOT: Cell<usize> = const { Cell::new(usize::MAX) };
+}
+
+fn note_thread() {
+    let _ = SLOT.try_with(|s| {
+        if s.get() == usize::MAX {
+            s.set(NEXT_SLOT.fetch_add(1, Ordering::Relaxed));
+        }
+        SEEN.fetch_or(1 << s.get().min(63), Ordering::Relaxed);
+    });
+}
+
 fn grow(n: usize) {
     let now = CUR.fetch_add(n, Ordering::Relaxed) + n;
     PEAK.fetch_max(now, Ordering::Relaxed);
+    if TRACK.load(Ordering::Relaxed) {
+        note_thread();
+    }
 }
 
 // SAFETY: every method forwards to `System` with the same arguments and only adds counters.
@@ -76,12 +101,38 @@ fn measured<R>(f: impl FnOnce() -> R) -> (R, usize) {
     (r, PEAK.load(Ordering::Relaxed).saturating_sub(base))
 }
 
-/// What `read` may hold beyond its ledger: small fixed fields of the result, `Vec` doubling of a
-/// few entries, the strings of the XMP properties. The inputs have tens of properties.
+/// What `read` may hold beyond its ledger: small fixed fields of the result and `Vec` doubling of
+/// a few entries. The big-input tests below need several MiB, so this is under a tenth of that.
 const READ_SLACK: usize = 256 << 10;
 /// What `jpeg` may hold beyond its ledger: tables and frame state under 64 KiB each, spare
-/// vector capacity, thread set-up (the same 1 MiB as jpeg-rs tests/resources.rs).
+/// vector capacity, thread set-up (the same 1 MiB as jpeg-rs tests/resources.rs). The decode
+/// tests below need 9 MiB or more, so this is about a ninth of that.
 const DECODE_SLACK: usize = 1 << 20;
+
+/// The base and gain map sizes of the big Ultra HDR file: the base alone decodes to 9 MiB of
+/// RGBA, and the frame has 2.4 million pixels, enough for jpeg-rs to cut it into threaded work.
+const BIG_BASE: usize = 1536;
+const BIG_GM: usize = 768;
+
+/// The smallest `max_alloc` (to within 64 KiB) at which `ok` holds, found by bisection, as
+/// `(just_below, enough)`: `ok(just_below)` is false and `ok(enough)` is true.
+fn min_alloc(ok: impl Fn(usize) -> bool) -> (usize, usize) {
+    let (mut lo, mut hi) = (0, 64 << 20);
+    assert!(ok(hi), "fails even at {hi} bytes");
+    while hi - lo > 64 << 10 {
+        let mid = lo + (hi - lo) / 2;
+        if ok(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    (lo, hi)
+}
+
+fn is_alloc_error(e: &Error) -> bool {
+    matches!(e, Error::LimitExceeded(Limit::Alloc) | Error::OutOfMemory)
+}
 
 fn within(what: &str, peak: usize, max_alloc: usize, slack: usize) {
     assert!(
@@ -160,71 +211,275 @@ fn read_charges_the_xmp_packet() {
     within("xmp at 8 MiB", peak, lim.max_alloc, READ_SLACK);
 }
 
-// Decode of two images: the base stays alive while the gain map decodes. The peak stays within
-// max_alloc for every cap and thread count, and an Ok result is the same for all of them.
+// A HEIC file whose gain map XMP item is several MiB: 2000 properties of 1.5 KB each. It is one
+// extent, so `read` borrows it from the input and then copies it once for the XMP parse.
+fn heic_big_xmp() -> Vec<u8> {
+    let xml = big_xmp_xml();
+    let mut s = Heif::new(b"heic");
+    let size = s.prop(ispe(64, 48));
+    let small = s.prop(ispe(32, 24));
+    let cfg = s.prop(hvcc());
+    let aux = s.prop(auxc(APPLE_AUX));
+    s.item(1, b"hvc1", &[1; 4], &[size, cfg]);
+    s.item(2, b"hvc1", &[2; 4], &[small, cfg, aux]);
+    s.xmp_item(3, &xml);
+    s.link(b"auxl", 2, &[1]);
+    s.link(b"cdsc", 3, &[2]);
+    s.build()
+}
+
+// The same file with the XMP item cut into 8 extents, which `read` has to copy into one buffer,
+// and 40 `iovl` overlay items of 8000 inputs each, which stay in the parsed graph for the whole
+// call (about 4 MiB of overlay inputs, plus their `dimg` lists).
+fn heic_big_graph() -> Vec<u8> {
+    let xml = big_xmp_xml();
+    let mut s = Heif::new(b"heic");
+    let size = s.prop(ispe(64, 48));
+    let small = s.prop(ispe(32, 24));
+    let cfg = s.prop(hvcc());
+    let aux = s.prop(auxc(APPLE_AUX));
+    s.item(1, b"hvc1", &[1; 4], &[size, cfg]);
+    s.item(2, b"hvc1", &[2; 4], &[small, cfg, aux]);
+    s.xmp_item(3, &xml);
+    s.split(3, 8);
+    s.link(b"auxl", 2, &[1]);
+    s.link(b"cdsc", 3, &[2]);
+    const INPUTS: usize = 8000;
+    // Version 0, flags 0, four fill words, a 64 x 48 canvas, then an (x, y) pair per input.
+    let mut iovl = vec![0u8; 2 + 8];
+    iovl.extend_from_slice(&64u16.to_be_bytes());
+    iovl.extend_from_slice(&48u16.to_be_bytes());
+    iovl.resize(iovl.len() + 4 * INPUTS, 0);
+    for id in 10..50 {
+        s.item(id, b"iovl", &iovl, &[size]);
+        s.link(b"dimg", id, &[1; INPUTS]);
+    }
+    s.build()
+}
+
+fn big_xmp_xml() -> String {
+    let mut props = String::from(
+        "<HDRGainMap:HDRGainMapVersion>65536</HDRGainMap:HDRGainMapVersion>\
+         <HDRGainMap:HDRGainMapHeadroom>4.5</HDRGainMap:HDRGainMapHeadroom>",
+    );
+    let value = "v".repeat(1500);
+    for i in 0..2000 {
+        props.push_str(&format!("<HDRGainMap:P{i}>{value}</HDRGainMap:P{i}>"));
+    }
+    let xml = xmp_doc(APPLE_DECL, "", &props);
+    assert!(xml.len() > 2 << 20 && xml.len() < 4 << 20, "{}", xml.len());
+    xml
+}
+
+// A 3 MiB XMP item: the smallest cap that lets `read` succeed is above the packet size, one cap
+// just below it gives an allocation error, and at every cap the measured peak stays within
+// max_alloc plus a slack that is under a tenth of the packet.
+#[test]
+fn read_peak_with_a_big_xmp_item() {
+    let _g = lock();
+    let data = heic_big_xmp();
+    let run = |cap: usize| {
+        let lim = limits_of(cap, 1);
+        measured(|| gainmap::read(&data, &lim, &no_cancel()).map(|_| ()))
+    };
+    let (below, need) = min_alloc(|cap| run(cap).0.is_ok());
+    assert!(need >= 3 << 20, "the packet is not charged: {need}");
+    for cap in [
+        below,
+        need,
+        need / 2,
+        1 << 20,
+        2 * need,
+        Limits::default().max_alloc,
+    ] {
+        let (r, peak) = run(cap);
+        let at = format!("big xmp max_alloc {cap}");
+        match r {
+            Ok(()) => assert!(cap >= need, "{at}: succeeded below {need}"),
+            Err(e) => {
+                assert!(is_alloc_error(&e), "{at}: {e}");
+                assert!(cap < need, "{at}: failed at or above {need}");
+            }
+        }
+        within(&at, peak, cap, READ_SLACK);
+    }
+    // At a generous cap the call really does hold the packet: the gate sees a peak well above
+    // the slack, so a ledger that charged nothing could not pass.
+    let (r, peak) = run(Limits::default().max_alloc);
+    assert_eq!(r, Ok(()));
+    assert!(
+        peak >= 3 << 20,
+        "peak {peak} is below the size of the packet"
+    );
+}
+
+// A large parsed graph (40 overlays of 8000 inputs) and a multi-extent XMP item that `read`
+// copies: at every cap the measured peak stays within max_alloc plus the slack, and a cap below
+// what the call needs gives an allocation error. The graph and the copy are held together, so
+// the peak at a generous cap is well above the packet alone.
+#[test]
+fn read_peak_with_a_big_graph_and_split_xmp() {
+    let _g = lock();
+    let data = heic_big_graph();
+    let run = |cap: usize| {
+        let lim = limits_of(cap, 1);
+        measured(|| gainmap::read(&data, &lim, &no_cancel()).map(|_| ()))
+    };
+    let (below, need) = min_alloc(|cap| run(cap).0.is_ok());
+    assert!(need >= 3 << 20, "the packet is not charged: {need}");
+    for cap in [
+        below,
+        need,
+        need / 2,
+        1 << 20,
+        2 * need,
+        Limits::default().max_alloc,
+    ] {
+        let (r, peak) = run(cap);
+        let at = format!("big graph max_alloc {cap}");
+        match r {
+            Ok(()) => assert!(cap >= need, "{at}: succeeded below {need}"),
+            Err(e) => {
+                assert!(is_alloc_error(&e), "{at}: {e}");
+                assert!(cap < need, "{at}: failed at or above {need}");
+            }
+        }
+        within(&at, peak, cap, READ_SLACK);
+    }
+    // The overlay inputs (40 x 8000 x 12 bytes) and the copied packet (over 2 MiB) are both live
+    // at the peak, so a call that charged or held only one of them would sit below this.
+    let (r, peak) = run(Limits::default().max_alloc);
+    assert_eq!(r, Ok(()));
+    assert!(peak >= 5 << 20, "peak {peak} is below graph plus packet");
+}
+
+// Decode of two big images: the base (9 MiB of RGBA) stays alive while the gain map decodes. At
+// each thread count the smallest cap that works is found, one just below it gives an allocation
+// error, and the peak stays within max_alloc plus the slack at every cap; an Ok result is the
+// same for all of them.
 #[test]
 fn decode_peak_within_max_alloc() {
     let _g = lock();
-    let data = ultra_hdr(256, 128);
+    let data = ultra_hdr(BIG_BASE, BIG_GM);
     let img = gainmap::read(&data, &limits_of(1 << 30, 1), &no_cancel()).unwrap();
     let want = gainmap::decode(&data, &img, &limits_of(1 << 30, 1), &no_cancel()).unwrap();
-    assert_eq!(want.base.data.len(), 256 * 256 * 4);
+    let base_bytes = BIG_BASE * BIG_BASE * 4;
+    assert_eq!(want.base.data.len(), base_bytes);
     for t in [1, 2] {
-        for max_alloc in [
+        let run = |cap: usize| {
+            let lim = limits_of(cap, t);
+            measured(|| gainmap::decode(&data, &img, &lim, &no_cancel()))
+        };
+        let (below, need) = min_alloc(|cap| run(cap).0.is_ok());
+        assert!(
+            need >= base_bytes,
+            "threads {t}: the base is not charged: {need}"
+        );
+        for cap in [
+            below,
+            need,
+            need / 2,
             256 << 10,
-            1 << 20,
-            2 << 20,
-            8 << 20,
+            2 * need,
             Limits::default().max_alloc,
         ] {
-            let lim = limits_of(max_alloc, t);
-            let at = format!("threads {t} max_alloc {max_alloc}");
-            let (r, peak) = measured(|| gainmap::decode(&data, &img, &lim, &no_cancel()));
+            let at = format!("threads {t} max_alloc {cap}");
+            let (r, peak) = run(cap);
             match &r {
-                Ok(d) => assert_eq!(d, &want, "{at}"),
-                Err(e) => assert_eq!(e, &Error::LimitExceeded(Limit::Alloc), "{at}"),
+                Ok(d) => {
+                    assert_eq!(d, &want, "{at}");
+                    assert!(cap >= need, "{at}: succeeded below {need}");
+                }
+                Err(e) => {
+                    assert!(is_alloc_error(e), "{at}: {e}");
+                    assert!(cap < need, "{at}: failed at or above {need}");
+                }
             }
-            if max_alloc >= 8 << 20 {
-                assert!(r.is_ok(), "{at}");
-            }
-            within(&at, peak, max_alloc, DECODE_SLACK);
+            within(&at, peak, cap, DECODE_SLACK);
         }
+        // At a generous cap the call holds both images, so the peak is far above the slack.
+        let (r, peak) = run(Limits::default().max_alloc);
+        assert!(r.is_ok());
+        assert!(
+            peak >= base_bytes,
+            "threads {t}: peak {peak} is below the base"
+        );
     }
 }
 
-// The threads of the nested JPEG decode stay under max_threads, and 1 never spawns.
+/// The number of threads that allocated during `f`, as the largest of five runs: a run that
+/// breaks the limit must fail the test even if another run happens to see fewer threads. Every
+/// test of this file holds `lock()`, so the other test threads are idle, and a first call before
+/// the runs starts the pool threads.
+fn threads_used(f: impl Fn()) -> u32 {
+    f();
+    (0..5)
+        .map(|_| {
+            SEEN.store(0, Ordering::SeqCst);
+            TRACK.store(true, Ordering::SeqCst);
+            f();
+            TRACK.store(false, Ordering::SeqCst);
+            SEEN.load(Ordering::SeqCst).count_ones()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+// `gainmap::decode` itself, on an image big enough that jpeg-rs threads it: max_threads 1 runs on
+// the calling thread alone, and 2 uses at most two threads (the caller and one more), even though
+// the shared jpeg pool has a thread for every core. Threads are counted by the allocations they
+// make, so a thread that works without allocating would not be seen; jpeg's own tests count the
+// workers of a call exactly, and the check at the top shows that this image is cut for them.
 #[test]
-fn nested_decode_threads_stay_under_max_threads() {
+fn decode_threads_stay_under_max_threads() {
     let _g = lock();
-    let data = ultra_hdr(256, 128);
+    let data = ultra_hdr(BIG_BASE, BIG_GM);
     let img = gainmap::read(&data, &limits_of(1 << 30, 1), &no_cancel()).unwrap();
-    let gm = img.gain_map.as_ref().unwrap();
-    for coded in [&img.base, &gm.image] {
-        let bytes = img
-            .coded_bytes(&data, coded, &limits(), &no_cancel())
-            .unwrap();
-        for t in [1usize, 2] {
-            let l = jpeg::Limits {
-                max_threads: t,
-                ..jpeg::Limits::default()
-            };
-            let (r, probe) = jpeg::decode_probe(
-                &bytes,
-                &jpeg::DecodeOptions::default(),
-                &l,
+    // jpeg really runs this base on more than one worker in its RGBA colour pass, the pass that
+    // gainmap::decode uses (a pool task that wakes after the
+    // caller took every job is not counted, so it may take a few tries).
+    let base = img
+        .coded_bytes(&data, &img.base, &limits(), &no_cancel())
+        .unwrap();
+    let jl = jpeg::Limits {
+        max_threads: 2,
+        ..jpeg::Limits::default()
+    };
+    let peak = (0..30)
+        .map(|_| {
+            jpeg::decode_probe(
+                &base,
+                &jpeg::DecodeOptions {
+                    format: jpeg::Format::Rgba,
+                    ..jpeg::DecodeOptions::default()
+                },
+                &jl,
                 &no_cancel(),
-                true,
-            );
-            assert!(r.is_ok());
-            assert!(
-                probe.threads_peak <= t,
-                "threads {t}: {}",
-                probe.threads_peak
-            );
-            if t == 1 {
-                assert_eq!(probe.threads_peak, 1);
-            }
-        }
+                false,
+            )
+            .1
+            .threads_peak
+        })
+        .max()
+        .unwrap_or(0);
+    // Under qemu-user (the arm64 job) jpeg-rs may run this image on one worker, so the check
+    // that the image is big enough to thread holds on x86_64 only; the bounds below hold anywhere.
+    if cfg!(target_arch = "x86_64") {
+        assert!(
+            peak > 1,
+            "the image is too small for jpeg to thread: {peak}"
+        );
+    }
+
+    for t in [1usize, 2] {
+        let lim = limits_of(1 << 30, t);
+        let used = threads_used(|| {
+            assert!(gainmap::decode(&data, &img, &lim, &no_cancel()).is_ok());
+        });
+        assert!(
+            used >= 1 && used as usize <= t,
+            "max_threads {t}: {used} threads"
+        );
     }
     // And the result of the whole call is the same for both values.
     let one = gainmap::decode(&data, &img, &limits_of(1 << 30, 1), &no_cancel());
@@ -236,6 +491,8 @@ fn nested_decode_threads_stay_under_max_threads() {
 // The grep-able claim of docs/threading.md: nothing in src/ starts a thread.
 #[test]
 fn src_spawns_no_thread() {
+    // Holds the lock so its allocations cannot land in the thread count of another test.
+    let _g = lock();
     fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
         let Ok(rd) = fs::read_dir(dir) else { return };
         for e in rd.flatten() {

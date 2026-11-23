@@ -66,9 +66,18 @@ fn decode_jpeg(
         return Err(Error::Malformed("location"));
     };
     let bytes = data.get(range.clone()).ok_or(Error::Truncated)?;
+    // jpeg-rs reads a `max_alloc` of exactly 1 GiB as its unset default and may then exceed it by
+    // the page rounding of its ledger. One byte less is a hard cap, so the nested cap never
+    // equals that value.
+    const JPEG_UNSET_MAX_ALLOC: u64 = 1 << 30;
+    let remaining = u64::try_from(budget.remaining()).unwrap_or(u64::MAX);
     let nested = jpeg::Limits {
         max_pixels: limits.max_pixels,
-        max_alloc: u64::try_from(budget.remaining()).unwrap_or(u64::MAX),
+        max_alloc: if remaining == JPEG_UNSET_MAX_ALLOC {
+            remaining - 1
+        } else {
+            remaining
+        },
         max_threads: limits.max_threads,
     };
     let options = DecodeOptions {

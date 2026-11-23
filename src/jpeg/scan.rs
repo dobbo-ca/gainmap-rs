@@ -59,6 +59,19 @@ fn skip_entropy(data: &[u8], mut pos: usize, budget: &Budget<'_>) -> Result<usiz
     }
 }
 
+/// Counts one marker (or fill byte) outside entropy data against `max_segments` and checks the
+/// cancel flag every 1024 of them.
+fn tick(count: &mut usize, limits: &Limits, budget: &Budget<'_>) -> Result<(), Error> {
+    *count += 1;
+    if *count > limits.max_segments {
+        return Err(Error::LimitExceeded(Limit::Segments));
+    }
+    if count.is_multiple_of(1024) {
+        budget.check_cancel()?;
+    }
+    Ok(())
+}
+
 /// Walks the image that starts at `start` (which must be an SOI marker) up to its EOI marker.
 /// Allocates nothing. The cancel flag is checked every 1024 markers and every 1024 stuffed
 /// bytes of entropy data.
@@ -67,7 +80,8 @@ fn skip_entropy(data: &[u8], mut pos: usize, budget: &Budget<'_>) -> Result<usiz
 ///
 /// [`Error::Malformed`] when `start` is not an SOI or a marker is invalid; [`Error::Truncated`]
 /// when the data ends before the EOI; [`Error::LimitExceeded`] with `Segments` after
-/// `limits.max_segments` markers with a length; [`Error::Cancelled`].
+/// `limits.max_segments` markers outside entropy data, counting segments, TEM and RST markers
+/// and fill bytes (restart markers inside entropy data are not counted); [`Error::Cancelled`].
 pub(crate) fn scan(
     data: &[u8],
     start: usize,
@@ -87,6 +101,7 @@ pub(crate) fn scan(
         // Fill bytes: any number of 0xFF before the marker code.
         while data.get(pos + 1) == Some(&0xFF) {
             pos += 1;
+            tick(&mut segments, limits, budget)?;
         }
         let marker = *data.get(pos + 1).ok_or(Error::Truncated)?;
         pos += 2;
@@ -95,17 +110,14 @@ pub(crate) fn scan(
                 out.end = pos;
                 return Ok(out);
             }
-            0x01 | 0xD0..=0xD7 => continue,
+            0x01 | 0xD0..=0xD7 => {
+                tick(&mut segments, limits, budget)?;
+                continue;
+            }
             0x00 | 0xD8 => return Err(Error::Malformed("jpeg-marker")),
             _ => {}
         }
-        segments += 1;
-        if segments > limits.max_segments {
-            return Err(Error::LimitExceeded(Limit::Segments));
-        }
-        if segments.is_multiple_of(1024) {
-            budget.check_cancel()?;
-        }
+        tick(&mut segments, limits, budget)?;
         let len = data.get(pos..pos + 2).ok_or(Error::Truncated)?;
         let len = usize::from(u16::from_be_bytes([len[0], len[1]]));
         if len < 2 {

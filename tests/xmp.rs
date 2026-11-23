@@ -27,7 +27,7 @@ fn attribute_form() {
     assert_eq!(x.hdr_capacity_min.as_deref(), Some("0"));
     assert_eq!(x.hdr_capacity_max.as_deref(), Some("2.5"));
     assert_eq!(x.base_rendition_is_hdr.as_deref(), Some("False"));
-    let m = Metadata::from_xmp(&x).unwrap();
+    let m = Metadata::from_xmp(&x, &limits()).unwrap();
     assert_eq!(m.gain_map_max, [2.0; 3]);
     assert_eq!(m.gain_map_min, [0.0; 3]);
     assert_eq!(m.gamma, [1.0; 3]);
@@ -54,7 +54,7 @@ fn seq_with_one_value_applies_to_all_channels() {
     let x = parse(&xml);
     assert_eq!(x.gain_map_min, strings(&["0.5"]));
     assert_eq!(x.gamma, strings(&["1.5"]));
-    let m = Metadata::from_xmp(&x).unwrap();
+    let m = Metadata::from_xmp(&x, &limits()).unwrap();
     assert_eq!(m.gain_map_min, [0.5; 3]);
     assert_eq!(m.gain_map_max, [2.0; 3]);
     assert_eq!(m.gamma, [1.5; 3]);
@@ -81,7 +81,7 @@ fn seq_with_three_values_is_one_per_channel() {
     assert_eq!(x.gain_map_max, strings(&["1", "2", "3"]));
     // The text is kept as stored, with its spaces.
     assert_eq!(x.gamma, strings(&[" 1 ", "1.25", "1.5"]));
-    let m = Metadata::from_xmp(&x).unwrap();
+    let m = Metadata::from_xmp(&x, &limits()).unwrap();
     assert_eq!(m.gain_map_min, [-0.25, -0.5, -0.75]);
     assert_eq!(m.gain_map_max, [1.0, 2.0, 3.0]);
     assert_eq!(m.gamma, [1.0, 1.25, 1.5]);
@@ -93,7 +93,11 @@ fn seq_with_three_values_is_one_per_channel() {
 fn base_rendition_is_hdr_sets_the_direction() {
     let mut x = parse(&gm_xmp("2", "2.5"));
     x.base_rendition_is_hdr = Some("True".to_string());
-    assert!(Metadata::from_xmp(&x).unwrap().backward_direction);
+    assert!(
+        Metadata::from_xmp(&x, &limits())
+            .unwrap()
+            .backward_direction
+    );
 }
 
 #[test]
@@ -101,31 +105,31 @@ fn required_values_and_bad_values() {
     let mut x = parse(&gm_xmp("2", "2.5"));
     x.hdr_capacity_max = None;
     assert_eq!(
-        Metadata::from_xmp(&x),
+        Metadata::from_xmp(&x, &limits()),
         Err(Error::Malformed("xmp-missing-hdrcapacitymax"))
     );
     let mut x = parse(&gm_xmp("2", "2.5"));
     x.gain_map_max.clear();
     assert_eq!(
-        Metadata::from_xmp(&x),
+        Metadata::from_xmp(&x, &limits()),
         Err(Error::Malformed("xmp-missing-gainmapmax"))
     );
     let mut x = parse(&gm_xmp("2", "2.5"));
     x.gain_map_max = strings(&["1", "2"]);
     assert_eq!(
-        Metadata::from_xmp(&x),
+        Metadata::from_xmp(&x, &limits()),
         Err(Error::Malformed("xmp-bad-count"))
     );
     let mut x = parse(&gm_xmp("2", "2.5"));
     x.gamma = strings(&["one"]);
     assert_eq!(
-        Metadata::from_xmp(&x),
+        Metadata::from_xmp(&x, &limits()),
         Err(Error::Malformed("xmp-bad-number"))
     );
     let mut x = parse(&gm_xmp("2", "2.5"));
     x.gamma = strings(&["NaN"]);
     assert_eq!(
-        Metadata::from_xmp(&x),
+        Metadata::from_xmp(&x, &limits()),
         Err(Error::Malformed("xmp-bad-number"))
     );
 }
@@ -142,4 +146,26 @@ fn packets_without_hdrgm_or_not_xml() {
         __fuzz::hdrgm_from_packet(b"plain text", &limits()),
         Ok(None)
     );
+}
+
+#[test]
+fn base_rendition_is_hdr_swaps_the_sdr_and_hdr_values() {
+    let xml = xmp_doc(
+        HDRGM_DECL,
+        "hdrgm:Version=\"1.0\" hdrgm:GainMapMax=\"2\" hdrgm:OffsetSDR=\"0.01\" \
+         hdrgm:OffsetHDR=\"0.05\" hdrgm:HDRCapacityMin=\"0.5\" hdrgm:HDRCapacityMax=\"3\"",
+        "",
+    );
+    let mut x = parse(&xml);
+    let m = Metadata::from_xmp(&x, &limits()).unwrap();
+    assert!(!m.backward_direction);
+    assert_eq!((m.base_offset, m.alternate_offset), ([0.01; 3], [0.05; 3]));
+    assert_eq!((m.base_hdr_headroom, m.alternate_hdr_headroom), (0.5, 3.0));
+
+    // The base is the HDR rendition: its offset and headroom are the HDR ones.
+    x.base_rendition_is_hdr = Some("True".to_string());
+    let m = Metadata::from_xmp(&x, &limits()).unwrap();
+    assert!(m.backward_direction);
+    assert_eq!((m.base_offset, m.alternate_offset), ([0.05; 3], [0.01; 3]));
+    assert_eq!((m.base_hdr_headroom, m.alternate_hdr_headroom), (3.0, 0.5));
 }

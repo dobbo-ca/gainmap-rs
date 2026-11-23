@@ -7,8 +7,9 @@
 # /opt/oracle/bin/avif_oracle, libavif), EXIFTOOL (default /opt/exiftool/exiftool).
 #
 # Per input file, to bound the disk use: the C++ oracle and the Rust oracle write into temp dirs,
-# the .txt files are compared with diff (the first line is only "ok or not": the error classes of
-# the two sides differ by design) and the raw files with cmp, then the dirs are deleted. JPEG
+# the .txt files are compared with diff (uhdr: the first line is only "ok or not", the error
+# classes of the two sides differ by design; avif: the outcomes must be the same, see norm_avif)
+# and the raw files with cmp, then the dirs are deleted. JPEG
 # inputs also run through `oracle gen` mutations and `oracle uhdr`/`oracle xmp` (no crash, no
 # hang; an error is fine). After the loop ExifTool is compared with `oracle xmp`.
 # Works in /work (deleted at the end). Writes <report-dir>/summary.md, the lists of differences,
@@ -37,6 +38,7 @@ status=0
 : > "$work/results.tsv"
 : > "$report/rust-status.tsv"
 : > "$report/failures.tsv"
+: > "$report/exiftool.stderr"
 
 every=${PARITY_EVERY_N:-1}
 n=$(sh "$here/inputs.sh" "$corpus" "$work/in" "$every") || { echo "run.sh: inputs.sh failed" >&2; status=1; }
@@ -49,15 +51,50 @@ if [ "$n" -lt "$min" ]; then echo "run.sh: $n inputs, want at least $min" >&2; s
 
 fail() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$report/failures.tsv"; status=1; }
 
-# The text with its first line reduced to "status ok" or "status err".
-norm_txt() { awk 'NR == 1 { print ($0 == "status ok") ? "status ok" : "status err"; next } { print }' "$1"; }
+# The text for the uhdr-txt channel: the first line reduced to "status ok" or "status err" (the
+# error classes of the two sides differ by design), the size and channel lines (lines 2 to 6)
+# left out because the uhdr-dims channel compares them, then the metadata lines.
+norm_uhdr() { awk 'NR == 1 { print ($0 == "status ok") ? "status ok" : "status err"; next } NR > 6 { print }' "$1"; }
 
-# compare_one <file> <channel> <suffix> <text|raw> <c-dir> <rust-dir>
+# The size and channel lines of a uhdr text (lines 2 to 6).
+norm_dims() { awk 'NR >= 2 && NR <= 6' "$1"; }
+
+# The text of the avif channel: the first line says what happened, and only equal outcomes are
+# equal. libavif: ok, no-gainmap (parsed, gain map ignored), error. Rust: ok, no-metadata (a gain
+# map kept without usable metadata: the same outcome as libavif ignoring it), no-gain-map (the
+# gain map was dropped) and any error class (the read failed). A dropped gain map or a failed
+# read never equals a libavif outcome. <file> <c|rust>
+norm_avif() {
+  awk -v side="$2" 'NR == 1 {
+    s = $2
+    if (side == "rust") {
+      if (s == "no-metadata") s = "no-gainmap"
+      else if (s == "no-gain-map") s = "dropped"
+      else if (s != "ok") s = "rust-" s
+    }
+    print "status " s; next
+  } { print }' "$1"
+}
+
+# compare_one <file> <channel> <suffix> <txt|dims|avif|raw> <c-dir> <rust-dir>
+# Appends "file<TAB>channel<TAB>result<TAB>cok<TAB>rust": cok is 1 when the C tool produced data
+# for the channel (a text with "status ok", or a raw file). The guards below count only those
+# rows, so files that both sides refused do not count as compared. dims is compared only when the
+# C tool read the file. rust is the normalised Rust outcome of an avif row (empty for the others):
+# a known difference of the avif channel covers only the outcome in known-differences.tsv.
 compare_one() {
   f=$1; ch=$2; sfx=$3; kind=$4; c="$5/$f.$sfx"; r="$6/$f.$sfx"
+  cok=0; rs=""
+  if [ -f "$c" ]; then
+    if [ "$kind" = raw ]; then cok=1; elif [ "$(head -n 1 "$c")" = "status ok" ]; then cok=1; fi
+  fi
   if [ -f "$c" ] && [ -f "$r" ]; then
-    if [ "$kind" = text ]; then
-      norm_txt "$c" > "$work/n1"; norm_txt "$r" > "$work/n2"
+    case $kind in
+      txt) norm_uhdr "$c" > "$work/n1"; norm_uhdr "$r" > "$work/n2" ;;
+      dims) [ "$cok" = 1 ] || return 0; norm_dims "$c" > "$work/n1"; norm_dims "$r" > "$work/n2" ;;
+      avif) norm_avif "$c" c > "$work/n1"; norm_avif "$r" rust > "$work/n2"; rs=$(sed -n '1s/^status //p' "$work/n2") ;;
+    esac
+    if [ "$kind" != raw ]; then
       if cmp -s "$work/n1" "$work/n2"; then res=equal; else
         res=differ; diff -u "$work/n1" "$work/n2" > "$report/diffs/$f.$ch.diff"
       fi
@@ -69,7 +106,7 @@ compare_one() {
   elif [ -f "$r" ]; then res=only-rust
   else return 0
   fi
-  printf '%s\t%s\t%s\n' "$f" "$ch" "$res" >> "$work/results.tsv"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$f" "$ch" "$res" "$cok" "$rs" >> "$work/results.tsv"
 }
 
 sweep_total=0
@@ -81,7 +118,8 @@ for f in $(ls "$work/in"); do
   # ---- libultrahdr + libjpeg-turbo against gainmap (every file: both must refuse a non-JPEG)
   timeout 900 "$uhdr" "$one" "$oc" || fail "$f" uhdr-cpp "exit $?"
   timeout 900 "$oracle" uhdr "$one" "$or" || fail "$f" uhdr-rust "exit $?"
-  compare_one "$f" uhdr-txt txt text "$oc" "$or"
+  compare_one "$f" uhdr-txt txt txt "$oc" "$or"
+  compare_one "$f" uhdr-dims txt dims "$oc" "$or"
   compare_one "$f" uhdr-base-jpg base.jpg raw "$oc" "$or"
   compare_one "$f" uhdr-gm-jpg gm.jpg raw "$oc" "$or"
   compare_one "$f" uhdr-base-rgba base.rgba raw "$oc" "$or"
@@ -89,13 +127,70 @@ for f in $(ls "$work/in"); do
   printf '%s\t%s\n' "$f" "$(head -n 1 "$or/$f.txt" 2>/dev/null | cut -d' ' -f2)" >> "$report/rust-status.tsv"
   [ -f "$or/$f.gm.jpg" ] && cp "$or/$f.gm.jpg" "$work/gm/$f.gm.jpg"
 
+  # ---- fallback: where libultrahdr could not read the file, decode the JPEGs gainmap extracted
+  # with libjpeg-turbo alone and compare with the Rust pixels.
+  # Every JPEG of the corpus carries a gain map, so when libultrahdr refuses one, a missing Rust
+  # file is a difference (never-drop rule), not a skip.
+  if [ "$(head -n 1 "$oc/$f.txt" 2>/dev/null)" != "status ok" ]; then
+    mkdir -p "$work/tj"
+    for spec in base.jpg:base.rgba:turbo-base-rgba gm.jpg:gm.raw:turbo-gm-raw; do
+      src=${spec%%:*}; rest=${spec#*:}; dst=${rest%%:*}; ch=${rest#*:}
+      if [ ! -f "$or/$f.$src" ]; then
+        case $f in
+          *.jpg|*.jpeg) printf '%s\t%s\t%s\t%s\n' "$f" "$ch" missing-rust 0 >> "$work/results.tsv" ;;
+        esac
+        continue
+      fi
+      rm -f "$work/tj/$f.$dst"
+      "$uhdr" decode "$or/$f.$src" "$work/tj/$f.$dst" 2>/dev/null
+      compare_one "$f" "$ch" "$dst" raw "$work/tj" "$or"
+    done
+    rm -rf "$work/tj"
+    # Where the base image starts and what size it has, without libultrahdr: the Rust base.jpg
+    # must be the first bytes of the file, and the Rust base size must be the ImageWidth and
+    # ImageHeight ExifTool reports for the file. Where the base image ends is not checked
+    # independently (the pixels of turbo-base-rgba stop at the first EOI anyway).
+    if [ -f "$or/$f.base.jpg" ]; then
+      nb=$(wc -c < "$or/$f.base.jpg")
+      if cmp -s -n "$nb" "$one/$f" "$or/$f.base.jpg"; then res=equal; else res=differ; fi
+      printf '%s\t%s\t%s\t%s\n' "$f" base-prefix "$res" 1 >> "$work/results.tsv"
+      w=$(perl "$exiftool" -s3 -n -ImageWidth "$one/$f" 2>> "$report/exiftool.stderr" | head -n 1)
+      h=$(perl "$exiftool" -s3 -n -ImageHeight "$one/$f" 2>> "$report/exiftool.stderr" | head -n 1)
+      mine=$(awk '$1 == "base.width" { w = $2 } $1 == "base.height" { h = $2 } END { print w "x" h }' "$or/$f.txt")
+      if [ -n "$w" ] && [ "$mine" = "${w}x${h}" ]; then res=equal; else res=differ; fi
+      printf '%s\t%s\t%s\t%s\n' "$f" base-size "$res" 1 >> "$work/results.tsv"
+    fi
+  fi
+
+  # ---- ExifTool locates the second MPF image: its bytes must be the gain-map JPEG. No
+  # MPImage2 after a successful ExifTool run (a file with no MPF) is n/a, not a difference. An
+  # ExifTool that fails is a failure of the run and a difference, never n/a.
+  if [ -f "$or/$f.gm.jpg" ]; then
+    perl "$exiftool" -b -MPImage2 "$one/$f" > "$work/mp2" 2>> "$report/exiftool.stderr"
+    et_exit=$?
+    if [ "$et_exit" -ne 0 ]; then res=error; fail "$f" exiftool-mpimage2 "exit $et_exit"
+    elif [ ! -s "$work/mp2" ]; then res=n/a
+    elif cmp -s "$work/mp2" "$or/$f.gm.jpg"; then res=equal
+    else res=differ; cmp "$work/mp2" "$or/$f.gm.jpg" > "$report/diffs/$f.exiftool-mpimage2.cmp" 2>&1
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$f" exiftool-mpimage2 "$res" 1 >> "$work/results.tsv"
+  fi
+
   # ---- libavif against gainmap (AVIF and HEIC inputs)
   case $f in
     *.avif|*.avifs|*.heic|*.heif)
       rm -rf "$oc" "$or"
-      timeout 900 "$avif" "$one" "$oc" || fail "$f" avif-c "exit $?"
       timeout 900 "$oracle" avif "$one" "$or" || fail "$f" avif-rust "exit $?"
-      compare_one "$f" avif txt text "$oc" "$or"
+      # libavif refuses a HEIC (no 'avif' brand), so a HEIC has no libavif channel. It is
+      # gated by compare.py instead: Rust must report a gain map, and its XMP values and
+      # sizes are compared with ExifTool.
+      case $f in
+        *.heic|*.heif) ;;
+        *)
+          timeout 900 "$avif" "$one" "$oc" || fail "$f" avif-c "exit $?"
+          compare_one "$f" avif txt avif "$oc" "$or"
+          ;;
+      esac
       ;;
   esac
 
@@ -107,6 +202,7 @@ for f in $(ls "$work/in"); do
       ng=$(ls "$work/gen" 2>/dev/null | wc -l | tr -d ' ')
       sweep_total=$((sweep_total + ng))
       if [ "$ng" -gt 0 ]; then
+        crashed=0
         if ! timeout 1800 "$oracle" uhdr "$work/gen" "$work/gen-out" --no-raw \
            || ! timeout 900 "$oracle" xmp "$work/gen" /dev/null; then
           # Find the file: run them one by one and keep the first that fails.
@@ -116,10 +212,11 @@ for f in $(ls "$work/in"); do
                || ! timeout 300 "$oracle" xmp "$work/g1" /dev/null; then
               cp "$g" "$report/crashers/"
               fail "$(basename "$g")" crash "mutation of $f"
+              crashed=1
               break
             fi
           done
-          [ -z "$(ls "$report/crashers")" ] && fail "$f" crash "failed as a batch, no single file reproduces it"
+          [ "$crashed" -eq 1 ] || fail "$f" crash "failed as a batch, no single file reproduces it"
         fi
       fi
       rm -rf "$work/gen" "$work/gen-out" "$work/g1" "$work/g1o"
@@ -132,8 +229,12 @@ done
 # that `oracle uhdr` wrote. -j JSON, -n no print conversion, -G1 family-1 group names, -a
 # duplicates, -b binary values, -ext '*' every extension.
 "$oracle" xmp "$work/in" "$work/xmp.jsonl" || fail all xmp-oracle "exit $?"
-perl "$exiftool" -j -n -G1 -a -b -ext '*' -XMP-hdrgm:all -XMP-HDRGainMap:all "$work/in" "$work/gm" \
-  > "$work/exiftool.json" 2> "$report/exiftool.stderr"
+# The same run gives compare.py what it needs for the gain-map gates: the MPF image count, the
+# GContainer directory (XMP-GContainer) and the image sizes (the HEIC check). A failing
+# ExifTool fails the run: its checks must not silently disappear.
+perl "$exiftool" -j -n -G1 -a -b -ext '*' -XMP-hdrgm:all -XMP-HDRGainMap:all -XMP-GContainer:all \
+  -MPF:NumberOfImages -ImageWidth -ImageHeight "$work/in" "$work/gm" \
+  > "$work/exiftool.json" 2>> "$report/exiftool.stderr" || fail all exiftool-json "exit $?"
 python3 -I "$here/compare.py" "$work/exiftool.json" "$work/xmp.jsonl" "$here/known-differences.tsv" "$report" || status=1
 
 # ---- the table
@@ -141,25 +242,26 @@ awk -F'\t' -v known="$here/known-differences.tsv" -v diffs="$report/differences.
 BEGIN {
   while ((getline line < known) > 0) {
     if (line ~ /^#/ || line == "") continue
-    split(line, p, "\t"); k[p[1] SUBSEP p[2]] = 1
+    split(line, p, "\t"); k[p[1] SUBSEP p[2]] = 1; want[p[1] SUBSEP p[2]] = p[4]
   }
   print "file\tchannel\tresult" > diffs
 }
 {
   f = $1; ch = $2; res = $3
   inputs[ch]++
-  if (res != "only-rust") okc[ch]++
+  if (res == "n/a") { na[ch]++; next }
+  if ($4 == 1) okc[ch]++
   if (res == "equal") { eq[ch]++; next }
   base = ch; sub(/-.*/, "", base)
-  if ((f SUBSEP ch) in k) { kn[ch]++; used[f SUBSEP ch] = 1 }
+  if ((f SUBSEP ch) in k && (ch != "avif" || want[f SUBSEP ch] == $5)) { kn[ch]++; used[f SUBSEP ch] = 1 }
   else if ((f SUBSEP base) in k) { kn[ch]++; used[f SUBSEP base] = 1 }
   else { df[ch]++; nd++; print f "\t" ch "\t" res > diffs }
 }
 END {
-  print "| channel | inputs | ok | equal | differ | known |"
-  print "|---|---:|---:|---:|---:|---:|"
-  n = split("uhdr-txt uhdr-base-jpg uhdr-gm-jpg uhdr-base-rgba uhdr-gm-raw avif", chs, " ")
-  for (i = 1; i <= n; i++) { c = chs[i]; printf "| %s | %d | %d | %d | %d | %d |\n", c, inputs[c], okc[c], eq[c], df[c], kn[c] }
+  print "| channel | inputs | ok | equal | differ | known | n/a |"
+  print "|---|---:|---:|---:|---:|---:|---:|"
+  n = split("uhdr-txt uhdr-dims uhdr-base-jpg uhdr-gm-jpg uhdr-base-rgba uhdr-gm-raw avif turbo-base-rgba turbo-gm-raw base-prefix base-size exiftool-mpimage2", chs, " ")
+  for (i = 1; i <= n; i++) { c = chs[i]; printf "| %s | %d | %d | %d | %d | %d | %d |\n", c, inputs[c], okc[c], eq[c], df[c], kn[c], na[c] }
   unused = 0
   for (key in k) if (!(key in used)) { split(key, kk, SUBSEP); if (kk[2] != "xmp") unused++ }
   print ""
@@ -169,15 +271,19 @@ END {
 ndiff=$(cat "$work/ndiff" 2>/dev/null || echo 1)
 [ "$ndiff" -eq 0 ] || status=1
 
-# Guards against a run that compared nothing: libultrahdr must have read some files, and the
-# Rust side must have agreed on at least that many txt files.
-uhdr_ok=$(awk -F'\t' '$2 == "uhdr-txt" && $3 == "equal"' "$work/results.tsv" | wc -l | tr -d ' ')
+# Guards against a run that compared nothing: only files the C tool read (status ok) and the
+# Rust side agreed on count, so files that both sides refused do not count.
+uhdr_ok=$(awk -F'\t' '$2 == "uhdr-txt" && $3 == "equal" && $4 == 1' "$work/results.tsv" | wc -l | tr -d ' ')
 if [ "$uhdr_ok" -lt $((${PARITY_MIN_UHDR_OK:-15} / every)) ]; then
   echo "run.sh: only $uhdr_ok equal uhdr-txt files" >&2; status=1
 fi
-avif_eq=$(awk -F'\t' '$2 == "avif" && $3 == "equal"' "$work/results.tsv" | wc -l | tr -d ' ')
-if [ "$avif_eq" -lt $((${PARITY_MIN_AVIF_OK:-10} / every)) ]; then
+avif_eq=$(awk -F'\t' '$2 == "avif" && $3 == "equal" && $4 == 1' "$work/results.tsv" | wc -l | tr -d ' ')
+if [ "$avif_eq" -lt $((${PARITY_MIN_AVIF_OK:-8} / every)) ]; then
   echo "run.sh: only $avif_eq equal avif files" >&2; status=1
+fi
+mp_eq=$(awk -F'\t' '$2 == "exiftool-mpimage2" && $3 == "equal"' "$work/results.tsv" | wc -l | tr -d ' ')
+if [ "$mp_eq" -lt $((${PARITY_MIN_MPIMAGE2_OK:-10} / every)) ]; then
+  echo "run.sh: only $mp_eq equal exiftool-mpimage2 files" >&2; status=1
 fi
 [ -s "$report/failures.tsv" ] && status=1
 
@@ -193,7 +299,7 @@ fi
   echo
   echo "## libultrahdr 2.0.2 + libjpeg-turbo 3.2.0, and libavif 1.4.2"
   echo
-  echo '"ok": the C tool produced the channel. "equal": same bytes (txt: same text, the error class of a refusal is ignored). "known": a difference listed in known-differences.tsv.'
+  echo '"ok": the C tool produced the channel. "equal": same bytes (uhdr-txt: same text, the error class of a refusal is ignored; avif: the same outcome and text). "known": a difference listed in known-differences.tsv.'
   echo
   cat "$work/table.md"
   echo

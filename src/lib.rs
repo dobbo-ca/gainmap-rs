@@ -36,11 +36,15 @@
 //!
 //! # Resource limits
 //!
-//! Every entry point takes [`Limits`] and a cancel flag (`&AtomicBool`).
+//! [`read`], [`decode`] and [`GainMapImage::coded_bytes`] take [`Limits`] and a cancel flag
+//! (`&AtomicBool`). [`IsoMetadata::parse`], [`Metadata::from_iso`] and [`Metadata::from_xmp`] take
+//! [`Limits`] only (they allocate nothing and are bounded by their input).
 //!
 //! - `max_alloc` (default 1 GiB) is the enforced peak of the working memory of one call,
 //!   including the nested calls into `jpeg`, `exif` and `isobmff`, which run under what is left.
-//!   More is [`Error::LimitExceeded`]`(`[`Limit::Alloc`]`)`.
+//!   More is [`Error::LimitExceeded`]`(`[`Limit::Alloc`]`)`. One exception is closed on purpose:
+//!   `jpeg` reads a `max_alloc` of exactly 1 GiB as its unset default and may then exceed it by
+//!   page rounding, so [`decode`] never passes exactly 1 GiB to it; it passes one byte less.
 //! - `max_threads` (default `available_parallelism`) is the most threads one call uses, the
 //!   calling thread included. [`read`] spawns none. [`decode`] passes the value to the JPEG
 //!   decoder; 1 runs on the calling thread.
@@ -144,7 +148,7 @@ pub mod __fuzz {
         };
         let hdrgm = crate::xmp::hdrgm_from_xmp(&parsed.xmp, &budget)?;
         if let Some(h) = &hdrgm {
-            let _ = Metadata::from_xmp(h);
+            let _ = Metadata::from_xmp(h, limits);
         }
         Ok(hdrgm)
     }

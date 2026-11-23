@@ -8,6 +8,6 @@ mod common;
 fuzz_target!(|data: &[u8]| {
     let lim = common::small_limits();
     if let Ok(Some(h)) = gainmap::__fuzz::hdrgm_from_packet(data, &lim) {
-        let _ = gainmap::Metadata::from_xmp(&h);
+        let _ = gainmap::Metadata::from_xmp(&h, &lim);
     }
 });
