@@ -101,16 +101,6 @@ impl Reader<'_> {
     }
 }
 
-/// Reads `minimum_version` and `writer_version`, the whole payload of the "version only" APP2
-/// segment of a primary image.
-pub(crate) fn parse_version(payload: &[u8]) -> Result<(u16, u16), Error> {
-    let mut r = Reader {
-        data: payload,
-        pos: 0,
-    };
-    Ok((r.u16()?, r.u16()?))
-}
-
 impl IsoMetadata {
     /// Parses the payload that starts at `minimum_version`: no `urn:iso:std:iso:ts:21496:-1`
     /// namespace and no `tmap` version byte. Bytes after the last field are ignored, as in
@@ -253,8 +243,6 @@ mod tests {
 
     #[test]
     fn version_only() {
-        assert_eq!(parse_version(&[0, 0, 0, 1]), Ok((0, 1)));
-        assert_eq!(parse_version(&[0, 0, 0]), Err(Error::Truncated));
         assert_eq!(IsoMetadata::parse(&[0, 0, 0, 0]), Err(Error::Truncated));
     }
 }

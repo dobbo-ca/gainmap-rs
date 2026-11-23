@@ -278,9 +278,8 @@ pub fn iso_common(multichannel: bool, minimum_version: u16) -> Vec<u8> {
     for v in [1000u32, 0, 3000] {
         b.extend_from_slice(&v.to_be_bytes());
     }
-    let channels = if multichannel { 3 } else { 1 };
+    let channels: i32 = if multichannel { 3 } else { 1 };
     for c in 0..channels {
-        let c = c as i32;
         for v in [c * 100, 2000 + c * 100, 1000, 15, 25] {
             b.extend_from_slice(&v.to_be_bytes());
         }
@@ -296,9 +295,8 @@ pub fn iso_separate(multichannel: bool) -> Vec<u8> {
     for v in [1u32, 2, 6, 2] {
         b.extend_from_slice(&v.to_be_bytes());
     }
-    let channels = if multichannel { 3 } else { 1 };
+    let channels: i32 = if multichannel { 3 } else { 1 };
     for c in 0..channels {
-        let c = c as i32;
         let pairs: [(i32, u32); 5] = [(-c, 4), (8 + c, 4), (3, 3), (1, 64), (2, 64)];
         for (n, d) in pairs {
             b.extend_from_slice(&n.to_be_bytes());
