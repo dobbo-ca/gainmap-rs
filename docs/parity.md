@@ -169,23 +169,49 @@ offset set to 0, `u32::MAX`, the file length, and plus and minus one; MPF entry 
 `tests/parity/run.sh <corpus> <oracle-binary> <report-dir>` works on one input at a time, to
 bound the disk use: it runs both oracles into temp dirs, compares the `.txt` files with `diff`
 (after reducing the first line to `ok` or not) and the raw files with `cmp`, and deletes them.
-Channels: `uhdr-txt`, `uhdr-base-jpg`, `uhdr-gm-jpg`, `uhdr-base-rgba`, `uhdr-gm-raw`, `avif` and
-`xmp`. The report (`summary.md`) has, per channel, the counts inputs, ok (the C tool produced it),
-equal, differ and known. It also has the Rust status of every input and the sweep result.
+Channels: `uhdr-txt`, `uhdr-base-jpg`, `uhdr-gm-jpg`, `uhdr-base-rgba`, `uhdr-gm-raw`, `avif`,
+`turbo-base-rgba`, `turbo-gm-raw`, `exiftool-mpimage2` and `xmp`. The report (`summary.md`) has,
+per channel, the counts inputs, ok (the C tool produced it), equal, differ, known and n/a. It also
+has the Rust status of every input and the sweep result.
+
+Two fallback channels make sure a file libultrahdr cannot read is still checked by independent C
+tools:
+
+- `turbo-base-rgba`, `turbo-gm-raw`: only when libultrahdr's status is not ok and the Rust oracle
+  wrote `base.jpg` / `gm.jpg`. `uhdr_oracle decode <in.jpg> <out.raw>` decodes that JPEG with
+  libjpeg-turbo alone (same settings and pixel format as above), and `cmp` compares it with
+  the Rust `base.rgba` / `gm.raw`. A decode failure of the C tool counts as a difference.
+- `exiftool-mpimage2`: for every JPEG where the Rust oracle wrote `gm.jpg`.
+  `exiftool -b -MPImage2 <file>` gives the second MPF image, and `cmp` compares it with the Rust
+  `gm.jpg`. This checks where `gainmap` found the gain map, for all files, also those
+  libultrahdr reads. If ExifTool gives no `MPImage2` (no MPF, for example a Google-container-only
+  file) the result is `n/a` and is not a difference.
 
 The gate (`/report/status` is 0) needs all of this:
 
 - the corpus is complete (47 inputs) and the C tools ran for every file;
 - no difference outside `known-differences.tsv`, in any channel;
-- at least 15 `uhdr-txt` and 10 `avif` files are equal, so a run that compared nothing fails;
+- at least 15 `uhdr-txt`, 10 `avif` and 10 `exiftool-mpimage2` files are equal, so a run that
+  compared nothing fails;
 - the no-crash sweep has no panic, abort, hang or tool failure. Every mutation goes through
   `oracle uhdr --no-raw` and `oracle xmp`, one batch per input; on a failure the files are tried
   one by one and the first that fails is kept in `crashers/`. An error is fine, a panic is not.
 
 `known-differences.tsv` (file, channel, reason) lists documented, expected deviations only.
-Channel `uhdr` covers every `uhdr-*` channel of the file. A line that is not used is counted in
-the summary. Today's lines are the ones recon found by reading the sources; the first CI run may
-show more, and each needs its reason before it is listed.
+Channel `uhdr` covers every `uhdr-*` channel of the file (likewise `turbo`, `exiftool`). A line
+that is not used is counted in the summary. Each line needs its reason before it is listed. Today
+there are eight:
+
+- The five JPEGs with `rdf:Seq` XMP (`paris_exif_xmp_gainmap_bigendian.jpg`,
+  `paris_exif_xmp_gainmap_littleendian.jpg`, `paris_exif_xmp_icc_gainmap_bigendian.jpg`,
+  `seine_sdr_different_gainmap_srgb.jpg`, `seine_sdr_gainmap_srgb.jpg`), channel `uhdr`:
+  libultrahdr reads attributes only and refuses them. They are gated by `turbo-*`,
+  `exiftool-mpimage2` and the ExifTool XMP channel.
+- `apple_gainmap_old.jpg` and `apple_gainmap_new.jpg`, channel `uhdr-txt` only: libultrahdr
+  derives metadata from the Apple headroom, `gainmap` keeps it raw. Their coded bytes and pixels
+  must compare equal.
+- `seine_sdr_gainmap_notmapbrand.avif`, channel `avif`: libavif needs the `tmap` brand and drops
+  the gain map; `gainmap` keeps it (it never drops a gain map).
 
 ### Where libultrahdr differs by design
 

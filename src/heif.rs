@@ -114,7 +114,9 @@ pub(crate) fn read(
     let img = heif.image(base_id)?;
     let base = coded(&heif, &img)?;
     let gain_map = match &img.gain_map {
-        Some(gm) => Some(read_gain_map(data, &heif, gm, base.codec, limits, budget)?),
+        Some(gm) => Some(read_gain_map(
+            data, &heif, gm, &img.xmp, base.codec, limits, budget,
+        )?),
         None => None,
     };
     let container = if base.codec == Codec::Av1
@@ -132,10 +134,45 @@ pub(crate) fn read(
     })
 }
 
+/// Reads and parses the XMP item `id` under the limits. Unreadable or malformed XMP is an issue;
+/// the limits, memory and cancel are errors. The caller releases the result.
+fn xmp_item(
+    data: &[u8],
+    heif: &Heif,
+    id: Option<&u32>,
+    limits: &Limits,
+    budget: &Budget<'_>,
+    issues: &mut Vec<&'static str>,
+) -> Result<Option<xmp::Parsed>, Error> {
+    let Some(&id) = id else { return Ok(None) };
+    let total = heif
+        .item(id)
+        .and_then(|it| it.data.as_ref().ok())
+        .map_or(0u64, |v| {
+            v.iter().fold(0u64, |n, e| n.saturating_add(e.length))
+        });
+    if total > u64::try_from(limits.max_xmp_bytes).unwrap_or(u64::MAX) {
+        return Err(Error::LimitExceeded(Limit::XmpBytes));
+    }
+    let il = nested_limits(limits, budget);
+    match heif
+        .item_bytes(data, id, &il, budget.cancel())
+        .map_err(Error::from)
+    {
+        Ok(bytes) => xmp::parse(&bytes, limits, budget, issues),
+        Err(e) if fatal(&e) => Err(e),
+        Err(_) => {
+            issues.push("xmp-unreadable");
+            Ok(None)
+        }
+    }
+}
+
 fn read_gain_map(
     data: &[u8],
     heif: &Heif,
     gm: &isobmff::GainMap,
+    base_xmp: &[u32],
     base_codec: Codec,
     limits: &Limits,
     budget: &Budget<'_>,
@@ -182,27 +219,7 @@ fn read_gain_map(
         }
     }
 
-    let mut parsed = None;
-    if let Some(&id) = gm.xmp.first() {
-        let total = heif
-            .item(id)
-            .and_then(|it| it.data.as_ref().ok())
-            .map_or(0u64, |v| {
-                v.iter().fold(0u64, |n, e| n.saturating_add(e.length))
-            });
-        if total > u64::try_from(limits.max_xmp_bytes).unwrap_or(u64::MAX) {
-            return Err(Error::LimitExceeded(Limit::XmpBytes));
-        }
-        let il = nested_limits(limits, budget);
-        match heif
-            .item_bytes(data, id, &il, budget.cancel())
-            .map_err(Error::from)
-        {
-            Ok(bytes) => parsed = xmp::parse(&bytes, limits, budget, &mut issues)?,
-            Err(e) if fatal(&e) => return Err(e),
-            Err(_) => issues.push("xmp-unreadable"),
-        }
-    }
+    let parsed = xmp_item(data, heif, gm.xmp.first(), limits, budget, &mut issues)?;
     let (hdrgm, apple) = match &parsed {
         Some(p) => (
             xmp::hdrgm_from_xmp(&p.xmp, budget)?,
@@ -211,6 +228,16 @@ fn read_gain_map(
         None => (None, None),
     };
     xmp::release(budget, parsed);
+
+    // hdrgm:Version of the primary (base) image's XMP, as for JPEG.
+    let pxmp = xmp_item(data, heif, base_xmp.first(), limits, budget, &mut issues)?;
+    let primary_version = match &pxmp {
+        Some(p) => xmp::hdrgm_version(&p.xmp)
+            .map(|s| budget.string(s))
+            .transpose()?,
+        None => None,
+    };
+    xmp::release(budget, pxmp);
 
     let metadata = resolve_metadata(iso.as_ref(), hdrgm.as_ref(), &mut issues);
     let kind = match gm.source {
@@ -223,7 +250,7 @@ fn read_gain_map(
         metadata,
         iso,
         xmp: hdrgm,
-        primary_version: None,
+        primary_version,
         apple,
         issues,
     })

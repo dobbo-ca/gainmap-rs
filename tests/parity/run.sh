@@ -89,6 +89,31 @@ for f in $(ls "$work/in"); do
   printf '%s\t%s\n' "$f" "$(head -n 1 "$or/$f.txt" 2>/dev/null | cut -d' ' -f2)" >> "$report/rust-status.tsv"
   [ -f "$or/$f.gm.jpg" ] && cp "$or/$f.gm.jpg" "$work/gm/$f.gm.jpg"
 
+  # ---- fallback: where libultrahdr could not read the file, decode the JPEGs gainmap extracted
+  # with libjpeg-turbo alone and compare with the Rust pixels.
+  if [ "$(head -n 1 "$oc/$f.txt" 2>/dev/null)" != "status ok" ]; then
+    mkdir -p "$work/tj"
+    for spec in base.jpg:base.rgba:turbo-base-rgba gm.jpg:gm.raw:turbo-gm-raw; do
+      src=${spec%%:*}; rest=${spec#*:}; dst=${rest%%:*}; ch=${rest#*:}
+      [ -f "$or/$f.$src" ] || continue
+      rm -f "$work/tj/$f.$dst"
+      "$uhdr" decode "$or/$f.$src" "$work/tj/$f.$dst" 2>/dev/null
+      compare_one "$f" "$ch" "$dst" raw "$work/tj" "$or"
+    done
+    rm -rf "$work/tj"
+  fi
+
+  # ---- ExifTool locates the second MPF image: its bytes must be the gain-map JPEG. No
+  # MPImage2 (a file with no MPF) is n/a, not a difference.
+  if [ -f "$or/$f.gm.jpg" ]; then
+    perl "$exiftool" -b -MPImage2 "$one/$f" > "$work/mp2" 2>/dev/null
+    if [ ! -s "$work/mp2" ]; then res=n/a
+    elif cmp -s "$work/mp2" "$or/$f.gm.jpg"; then res=equal
+    else res=differ; cmp "$work/mp2" "$or/$f.gm.jpg" > "$report/diffs/$f.exiftool-mpimage2.cmp" 2>&1
+    fi
+    printf '%s\t%s\t%s\n' "$f" exiftool-mpimage2 "$res" >> "$work/results.tsv"
+  fi
+
   # ---- libavif against gainmap (AVIF and HEIC inputs)
   case $f in
     *.avif|*.avifs|*.heic|*.heif)
@@ -148,6 +173,7 @@ BEGIN {
 {
   f = $1; ch = $2; res = $3
   inputs[ch]++
+  if (res == "n/a") { na[ch]++; next }
   if (res != "only-rust") okc[ch]++
   if (res == "equal") { eq[ch]++; next }
   base = ch; sub(/-.*/, "", base)
@@ -156,10 +182,10 @@ BEGIN {
   else { df[ch]++; nd++; print f "\t" ch "\t" res > diffs }
 }
 END {
-  print "| channel | inputs | ok | equal | differ | known |"
-  print "|---|---:|---:|---:|---:|---:|"
-  n = split("uhdr-txt uhdr-base-jpg uhdr-gm-jpg uhdr-base-rgba uhdr-gm-raw avif", chs, " ")
-  for (i = 1; i <= n; i++) { c = chs[i]; printf "| %s | %d | %d | %d | %d | %d |\n", c, inputs[c], okc[c], eq[c], df[c], kn[c] }
+  print "| channel | inputs | ok | equal | differ | known | n/a |"
+  print "|---|---:|---:|---:|---:|---:|---:|"
+  n = split("uhdr-txt uhdr-base-jpg uhdr-gm-jpg uhdr-base-rgba uhdr-gm-raw avif turbo-base-rgba turbo-gm-raw exiftool-mpimage2", chs, " ")
+  for (i = 1; i <= n; i++) { c = chs[i]; printf "| %s | %d | %d | %d | %d | %d | %d |\n", c, inputs[c], okc[c], eq[c], df[c], kn[c], na[c] }
   unused = 0
   for (key in k) if (!(key in used)) { split(key, kk, SUBSEP); if (kk[2] != "xmp") unused++ }
   print ""
@@ -178,6 +204,10 @@ fi
 avif_eq=$(awk -F'\t' '$2 == "avif" && $3 == "equal"' "$work/results.tsv" | wc -l | tr -d ' ')
 if [ "$avif_eq" -lt $((${PARITY_MIN_AVIF_OK:-10} / every)) ]; then
   echo "run.sh: only $avif_eq equal avif files" >&2; status=1
+fi
+mp_eq=$(awk -F'\t' '$2 == "exiftool-mpimage2" && $3 == "equal"' "$work/results.tsv" | wc -l | tr -d ' ')
+if [ "$mp_eq" -lt $((${PARITY_MIN_MPIMAGE2_OK:-10} / every)) ]; then
+  echo "run.sh: only $mp_eq equal exiftool-mpimage2 files" >&2; status=1
 fi
 [ -s "$report/failures.tsv" ] && status=1
 

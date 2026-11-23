@@ -102,3 +102,23 @@ fn damaged_files_never_panic() {
     // An ftyp box and nothing else.
     assert!(read(&bx(b"ftyp", b"avif\0\0\0\0avif")).is_err());
 }
+
+#[test]
+fn primary_version_from_the_base_image_xmp() {
+    // avif_tmap, plus an XMP item 4 on the base image (1) with hdrgm:Version.
+    let mut s = Heif::new(b"avif");
+    s.primary = 3;
+    let size = s.prop(ispe(64, 48));
+    let small = s.prop(ispe(32, 24));
+    let cfg = s.prop(av1c());
+    s.item(1, b"av01", &[1; 4], &[size, cfg]);
+    s.item(2, b"av01", &[2; 4], &[small, cfg]);
+    s.item(3, b"tmap", &tmap_payload(0), &[]);
+    s.xmp_item(4, &primary_xmp());
+    s.link(b"dimg", 3, &[1, 2]);
+    s.link(b"cdsc", 4, &[1]);
+    s.group(b"altr", 100, &[3, 1]);
+    let g = read(&s.build()).unwrap().gain_map.unwrap();
+    assert_eq!(g.primary_version.as_deref(), Some("1.0"));
+    assert!(g.issues.is_empty(), "{:?}", g.issues);
+}
