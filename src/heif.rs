@@ -300,14 +300,6 @@ fn pick_tmap(
     )))
 }
 
-/// The bytes of a copy that `item_bytes` made (0 for bytes borrowed from the file).
-fn owned_len(bytes: &Cow<'_, [u8]>) -> usize {
-    match bytes {
-        Cow::Owned(v) => v.len(),
-        Cow::Borrowed(_) => 0,
-    }
-}
-
 /// The most bytes of a `tmap` payload that are read: a valid one is 1 + 141 bytes, plus a few
 /// trailing bytes that writers add.
 const TMAP_MAX: u64 = 4096;
@@ -342,7 +334,11 @@ fn xmp_item(
     {
         Ok(bytes) => {
             // An item in several extents is copied; the copy lives while the parse runs.
-            let held = owned_len(&bytes);
+            let held = if let Cow::Owned(v) = &bytes {
+                v.len()
+            } else {
+                0
+            };
             budget.charge(held)?;
             let parsed = xmp::parse(&bytes, limits, budget, issues);
             budget.release(held);
@@ -398,7 +394,11 @@ fn read_gain_map(
                 .map_err(Error::from)
             {
                 Ok(bytes) => {
-                    let held = owned_len(&bytes);
+                    let held = if let Cow::Owned(v) = &bytes {
+                        v.len()
+                    } else {
+                        0
+                    };
                     budget.charge(held)?;
                     match bytes.split_first() {
                         Some((0, rest)) => match IsoMetadata::parse(rest, limits) {
