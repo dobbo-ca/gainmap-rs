@@ -249,7 +249,7 @@ fn heic_big_graph() -> Vec<u8> {
     let mut iovl = vec![0u8; 2 + 8];
     iovl.extend_from_slice(&64u16.to_be_bytes());
     iovl.extend_from_slice(&48u16.to_be_bytes());
-    iovl.extend(vec![0u8; 4 * INPUTS]);
+    iovl.resize(iovl.len() + 4 * INPUTS, 0);
     for id in 10..50 {
         s.item(id, b"iovl", &iovl, &[size]);
         s.link(b"dimg", id, &[1; INPUTS]);
