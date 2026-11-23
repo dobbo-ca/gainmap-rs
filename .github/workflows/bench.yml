@@ -1,0 +1,43 @@
+name: bench
+on: { workflow_dispatch: {}, push: { branches: [main] } }
+permissions:
+  contents: read
+# A new run waits for the one before it; it never cancels it (a measurement).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  # Not a required check, information only. libultrahdr + libjpeg-turbo and the Rust bench example run in one
+  # container over the same files, so the ratio compares the same machine.
+  bench:
+    runs-on: github-arc-runner-set
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { lfs: false }
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.CI_READ_APP_ID }}
+          private-key: ${{ secrets.CI_READ_APP_KEY }}
+          owner: dobbo-ca
+          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs
+          permission-contents: read
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: remote
+          endpoint: tcp://buildkitd.github-arc.svc.cluster.local:1234
+      # no-cache-filters: bench, so a BuildKit cache hit does not skip the timing.
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .github/ci/Dockerfile
+          target: bench-report
+          no-cache-filters: bench
+          push: false
+          outputs: type=local,dest=bench-out
+          cache-from: type=gha,scope=gainmap-rs-bench
+          cache-to: type=gha,mode=max,scope=gainmap-rs-bench
+          secrets: |
+            gh_token=${{ steps.app.outputs.token }}
+      - run: cat bench-out/bench.md >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,57 @@
+[package]
+name = "gainmap-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+gainmap = { path = "../.." }
+
+# Not part of the root package: only this crate may depend on libfuzzer-sys.
+[workspace]
+
+[[bin]]
+name = "read"
+path = "fuzz_targets/read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "iso"
+path = "fuzz_targets/iso.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mpf"
+path = "fuzz_targets/mpf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xmp"
+path = "fuzz_targets/xmp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "scan"
+path = "fuzz_targets/scan.rs"
+test = false
+doc = false
+bench = false
