@@ -236,7 +236,7 @@ fn never_drop_the_gain_map() {
 
 #[test]
 fn apple_xmp() {
-    let gm = gm_with(&[app1_xmp(&apple_xmp())]);
+    let gm = gm_with(&[app1_xmp(&common::apple_xmp())]);
     let b = with_mpf(&[], &jpeg_rgb(16, 16), &gm, true);
     let g = read(&b.file).unwrap().gain_map.unwrap();
     assert_eq!(g.kind, Kind::Apple);
