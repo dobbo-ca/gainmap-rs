@@ -95,7 +95,7 @@ RUN mkdir -p /opt/oracle/bin \
     && g++ -O2 -std=c++17 -I/opt/oracle/include /oracle-src/uhdr_oracle.cpp -o /opt/oracle/bin/uhdr_oracle \
        /opt/oracle/lib/libuhdr.a /opt/oracle/lib/libturbojpeg.a /opt/oracle/lib/libjpeg.a -lpthread \
     && gcc -O2 -std=gnu11 -I/opt/oracle/include /oracle-src/avif_oracle.c -o /opt/oracle/bin/avif_oracle \
-       /opt/oracle/lib/libavif.a /usr/lib/x86_64-linux-gnu/libdav1d.a -lm -lpthread -ldl \
+       /opt/oracle/lib/libavif.a -ldav1d -lm -lpthread -ldl \
     && export PKG_CONFIG_PATH=/opt/oracle/lib/pkgconfig \
     && pkg-config --static --libs libheif | grep -q de265 \
     && gcc -O2 -std=gnu99 -Wall -c -o /tmp/heif_oracle.o /oracle-src/heif_oracle.c $(pkg-config --cflags libheif) \
