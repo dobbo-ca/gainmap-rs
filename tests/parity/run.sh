@@ -47,9 +47,9 @@ every=${PARITY_EVERY_N:-1}
 n=$(sh "$here/inputs.sh" "$corpus" "$work/in" "$every") || { echo "run.sh: inputs.sh failed" >&2; status=1; }
 case $n in ''|*[!0-9]*) n=0 ;; esac
 echo "inputs: $n"
-# An empty or partial corpus must not pass: corpus.tsv lists PARITY_MIN_INPUTS files (divided
+# An empty or partial corpus must not pass: corpus.tsv and gen.sh list PARITY_MIN_INPUTS files (divided
 # by every-n).
-min=$((${PARITY_MIN_INPUTS:-56} / every))
+min=$((${PARITY_MIN_INPUTS:-75} / every))
 if [ "$n" -lt "$min" ]; then echo "run.sh: $n inputs, want at least $min" >&2; status=1; fi
 
 fail() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$report/failures.tsv"; status=1; }
@@ -322,7 +322,13 @@ fi
   cat /opt/oracle/versions.txt 2>/dev/null
   echo "ExifTool $(perl "$exiftool" -ver)"
   echo
-  echo "Inputs: $n (corpus.tsv, docs/corpus.md)"
+  echo "Inputs: $n (corpus.tsv and the generated files, docs/corpus.md)"
+  if [ -s "$corpus/gen.tsv" ]; then
+    echo
+    echo "Generated files (gen.sh; sha256, size, same bytes on two runs of the generator):"
+    echo
+    sed "s|^|- |; s|\t| |g" "$corpus/gen.tsv"
+  fi
   echo
   echo "## libultrahdr 2.0.2 + libjpeg-turbo 3.2.0, and libavif 1.4.2"
   echo
