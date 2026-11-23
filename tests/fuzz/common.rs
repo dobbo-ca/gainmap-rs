@@ -42,17 +42,17 @@ pub fn check_read(image: &GainMapImage, data: &[u8], lim: &Limits) {
     }
     if let Some(gm) = gm {
         if let Some(iso) = &gm.iso {
-            check_iso(iso);
+            check_iso(iso, lim);
         }
         if let Some(x) = &gm.xmp {
-            let _ = Metadata::from_xmp(x);
+            let _ = Metadata::from_xmp(x, lim);
         }
     }
     let _ = image.heif();
 }
 
 /// The checks on parsed ISO metadata.
-pub fn check_iso(m: &IsoMetadata) {
+pub fn check_iso(m: &IsoMetadata, lim: &Limits) {
     let _ = (
         m.is_multichannel(),
         m.use_base_colour_space(),
@@ -63,5 +63,5 @@ pub fn check_iso(m: &IsoMetadata) {
         assert_eq!(m.channels[1], m.channels[0], "channel 1 is not a copy of 0");
         assert_eq!(m.channels[2], m.channels[0], "channel 2 is not a copy of 0");
     }
-    let _ = Metadata::from_iso(m);
+    let _ = Metadata::from_iso(m, lim);
 }

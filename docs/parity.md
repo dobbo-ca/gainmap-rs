@@ -192,8 +192,8 @@ whatever else the shared cache holds, and `fetch.sh` checks size and SHA-256 of 
 on every run. Channels: `uhdr-txt` (the status line and the metadata lines), `uhdr-dims` (the
 base and gain-map sizes and the channel count, lines 2 to 6; compared only when libultrahdr read
 the file), `uhdr-base-jpg`, `uhdr-gm-jpg`, `uhdr-base-rgba`, `uhdr-gm-raw`, `avif`,
-`turbo-base-rgba`, `turbo-gm-raw`, `exiftool-mpimage2` and `xmp`. The report (`summary.md`) has,
-per channel, the counts inputs, ok (the C tool produced it), equal, differ, known and n/a. It also
+`turbo-base-rgba`, `turbo-gm-raw`, `base-prefix`, `base-size`, `exiftool-mpimage2` and `xmp`.
+The report (`summary.md`) has, per channel, the counts inputs, ok (the C tool produced it), equal, differ, known and n/a. It also
 has the Rust status of every input and the sweep result.
 
 Two fallback channels make sure a file libultrahdr cannot read is still checked by independent C
@@ -206,6 +206,12 @@ tools:
   `uhdr_oracle decode <in.jpg> <out.raw>` decodes that JPEG with libjpeg-turbo alone (same
   settings and pixel format as above), and `cmp` compares it with the Rust `base.rgba` /
   `gm.raw`. A decode failure of the C tool counts as a difference.
+- `base-prefix`, `base-size`: only when libultrahdr's status is not ok and the Rust oracle wrote
+  `base.jpg`. `base-prefix` checks that `base.jpg` is the first bytes of the input file;
+  `base-size` checks that the Rust `base.width` and `base.height` are the `ImageWidth` and
+  `ImageHeight` ExifTool reports for the file. Where the base image ends is not checked
+  independently for these files (the `turbo-base-rgba` decode stops at the first EOI, so it does
+  not show a base range that runs too far).
 - `exiftool-mpimage2`: for every JPEG where the Rust oracle wrote `gm.jpg`.
   `exiftool -b -MPImage2 <file>` gives the second MPF image, and `cmp` compares it with the Rust
   `gm.jpg`. This checks where `gainmap` found the gain map, for all files, also those
@@ -222,7 +228,9 @@ three independent sources, so a regression cannot hide behind "libultrahdr refus
   and pixels on the Rust side; a Rust `no-gain-map` is a difference in `uhdr-txt`.
 - **libavif** (AVIF): where it reports a gain map, the Rust text must be `ok` and equal; where it
   reports none or fails, the Rust outcome must be `no-metadata`, never `no-gain-map` or a read
-  error, except for the files in `known-differences.tsv`.
+  error, except for the files in `known-differences.tsv`. A line there for the `avif` channel
+  names the one Rust outcome it covers (`ok` or `no-gainmap`); a dropped gain map or a read
+  error on that file is still a difference.
 - **ExifTool** (`compare.py`): a file counts as having a gain map when ExifTool shows an `hdrgm`
   or `HDRGainMap` tag, `MPF:NumberOfImages` of 2 or more, or a Google container item with the
   semantic `GainMap`; every HEIC/HEIF input counts too. If `oracle xmp` reports no gain map for
@@ -235,9 +243,10 @@ libavif refuses a HEIC, so the only HEIC of the corpus (an iPhone file with an a
 `hdrgainmap` image and no `tmap`) is gated by ExifTool and by Rust itself: `oracle xmp` must
 report a gain map; the Apple `HDRGainMapVersion` / `HDRGainMapHeadroom` values are compared with
 the ExifTool entry of the file (when ExifTool shows any; the report counts the files where it did
-not); and the base-image size (and the gain-map size, when ExifTool lists more than one size)
-must be among the `ImageWidth` / `ImageHeight` values ExifTool reports. `oracle xmp` writes
-`"base":[w,h]` and `"gm":[w,h]` for that. These ExifTool tag names are the ones ExifTool 13.64 is
+not); and the base-image size must be among the `ImageWidth` / `ImageHeight` values ExifTool
+reports. `oracle xmp` writes `"base":[w,h]` for that. The gain-map size of the HEIC is not
+compared with anything: ExifTool's JSON holds one `ImageWidth` and one `ImageHeight` per file, so
+there is no second size to compare with, and libavif does not read HEIC. These ExifTool tag names are the ones ExifTool 13.64 is
 expected to use; if it names or places them differently, the first run shows it in
 `xmp-mismatches.tsv`.
 
@@ -256,7 +265,7 @@ The gate (`/report/status` is 0) needs all of this:
   one by one and the first that fails is kept in `crashers/`. A batch that fails with no single
   file reproducing it is reported for that input. An error is fine, a panic is not.
 
-`known-differences.tsv` (file, channel, reason) lists documented, expected deviations only.
+`known-differences.tsv` (file, channel, reason, and for `avif` the expected Rust outcome) lists documented, expected deviations only.
 Channel `uhdr` covers every `uhdr-*` channel of the file (likewise `turbo`, `exiftool`). A line
 that is not used is counted in the summary. Each line needs its reason before it is listed. Today
 there are eleven:

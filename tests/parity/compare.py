@@ -17,8 +17,9 @@ with the semantic GainMap, and every HEIC/HEIF input counts too. If gainmap repo
 for such a file, that is a mismatch, whatever known-differences.tsv says. An input or a gain-map
 JPEG that ExifTool has no entry for is a mismatch too (an ExifTool failure must not remove a
 check). For a HEIC the Apple values are compared with the ExifTool entry of the file itself
-(when ExifTool shows any), and the size of the base image, and of the gain map when ExifTool
-lists more than one size, must be one ExifTool reports (ImageWidth, ImageHeight).
+(when ExifTool shows any), and the size of the base image must be the ImageWidth and
+ImageHeight ExifTool reports. The gain-map size of a HEIC is not compared: ExifTool's JSON holds
+one ImageWidth and one ImageHeight per file, so it has no second size to compare with.
 
 Writes <report-dir>/xmp.md and <report-dir>/xmp-mismatches.tsv; the channel name in
 known-differences.tsv is `xmp`. Exits 1 on a mismatch that known-differences.tsv does not list.
@@ -192,9 +193,9 @@ def main():
             stats["no gain-map jpg for ExifTool"] += 1
         if is_heif:
             # A HEIC has no gain-map JPEG. The Apple values are compared with what ExifTool
-            # reports for the file itself, when it reports any; the sizes of the base image (and
-            # of the gain map, when ExifTool lists more than one size) must be ones ExifTool
-            # reports.
+            # reports for the file itself, when it reports any; the size of the base image must
+            # be one ExifTool reports. The gain-map size is not compared (ExifTool's JSON holds
+            # one ImageWidth and one ImageHeight per file).
             if et.get(name):
                 check(name, "gainmap", GAINMAP_KEYS, o["gainmap"], et[name])
             else:
@@ -204,13 +205,12 @@ def main():
                 if not theirs or "base" not in o:
                     stats["HEIC with no size in ExifTool"] += 1
                     continue
-                want = [o["base"][idx]] + ([o["gm"][idx]] if len(theirs) > 1 else [])
-                for w in want:
-                    stats["compared"] += 1
-                    if str(w) in theirs:
-                        stats["match"] += 1
-                    else:
-                        report_mismatch(name, "size", tag, json.dumps(theirs), json.dumps(w))
+                w = o["base"][idx]
+                stats["compared"] += 1
+                if str(w) in theirs:
+                    stats["match"] += 1
+                else:
+                    report_mismatch(name, "size", tag, json.dumps(theirs), json.dumps(w))
 
     lines = [
         "## XMP parity (ExifTool 13.64)",

@@ -201,7 +201,7 @@ fn uhdr_one(data: &[u8], limits: &Limits, cancel: &AtomicBool) -> Uhdr {
     let from_iso = gm
         .iso
         .as_ref()
-        .and_then(|i| Metadata::from_iso(i).ok())
+        .and_then(|i| Metadata::from_iso(i, limits).ok())
         .is_some_and(|m| &m == md);
     let mut t = String::from("status ok\n");
     t.push_str(&dims);

@@ -77,13 +77,14 @@ norm_avif() {
 }
 
 # compare_one <file> <channel> <suffix> <txt|dims|avif|raw> <c-dir> <rust-dir>
-# Appends "file<TAB>channel<TAB>result<TAB>cok": cok is 1 when the C tool produced data for the
-# channel (a text with "status ok", or a raw file). The guards below count only those rows, so
-# files that both sides refused do not count as compared. dims is compared only when the C tool
-# read the file.
+# Appends "file<TAB>channel<TAB>result<TAB>cok<TAB>rust": cok is 1 when the C tool produced data
+# for the channel (a text with "status ok", or a raw file). The guards below count only those
+# rows, so files that both sides refused do not count as compared. dims is compared only when the
+# C tool read the file. rust is the normalised Rust outcome of an avif row (empty for the others):
+# a known difference of the avif channel covers only the outcome in known-differences.tsv.
 compare_one() {
   f=$1; ch=$2; sfx=$3; kind=$4; c="$5/$f.$sfx"; r="$6/$f.$sfx"
-  cok=0
+  cok=0; rs=""
   if [ -f "$c" ]; then
     if [ "$kind" = raw ]; then cok=1; elif [ "$(head -n 1 "$c")" = "status ok" ]; then cok=1; fi
   fi
@@ -91,7 +92,7 @@ compare_one() {
     case $kind in
       txt) norm_uhdr "$c" > "$work/n1"; norm_uhdr "$r" > "$work/n2" ;;
       dims) [ "$cok" = 1 ] || return 0; norm_dims "$c" > "$work/n1"; norm_dims "$r" > "$work/n2" ;;
-      avif) norm_avif "$c" c > "$work/n1"; norm_avif "$r" rust > "$work/n2" ;;
+      avif) norm_avif "$c" c > "$work/n1"; norm_avif "$r" rust > "$work/n2"; rs=$(sed -n '1s/^status //p' "$work/n2") ;;
     esac
     if [ "$kind" != raw ]; then
       if cmp -s "$work/n1" "$work/n2"; then res=equal; else
@@ -105,7 +106,7 @@ compare_one() {
   elif [ -f "$r" ]; then res=only-rust
   else return 0
   fi
-  printf '%s\t%s\t%s\t%s\n' "$f" "$ch" "$res" "$cok" >> "$work/results.tsv"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$f" "$ch" "$res" "$cok" "$rs" >> "$work/results.tsv"
 }
 
 sweep_total=0
@@ -145,6 +146,20 @@ for f in $(ls "$work/in"); do
       compare_one "$f" "$ch" "$dst" raw "$work/tj" "$or"
     done
     rm -rf "$work/tj"
+    # Where the base image starts and what size it has, without libultrahdr: the Rust base.jpg
+    # must be the first bytes of the file, and the Rust base size must be the ImageWidth and
+    # ImageHeight ExifTool reports for the file. Where the base image ends is not checked
+    # independently (the pixels of turbo-base-rgba stop at the first EOI anyway).
+    if [ -f "$or/$f.base.jpg" ]; then
+      nb=$(wc -c < "$or/$f.base.jpg")
+      if cmp -s -n "$nb" "$one/$f" "$or/$f.base.jpg"; then res=equal; else res=differ; fi
+      printf '%s\t%s\t%s\t%s\n' "$f" base-prefix "$res" 1 >> "$work/results.tsv"
+      w=$(perl "$exiftool" -s3 -n -ImageWidth "$one/$f" 2>> "$report/exiftool.stderr" | head -n 1)
+      h=$(perl "$exiftool" -s3 -n -ImageHeight "$one/$f" 2>> "$report/exiftool.stderr" | head -n 1)
+      mine=$(awk '$1 == "base.width" { w = $2 } $1 == "base.height" { h = $2 } END { print w "x" h }' "$or/$f.txt")
+      if [ -n "$w" ] && [ "$mine" = "${w}x${h}" ]; then res=equal; else res=differ; fi
+      printf '%s\t%s\t%s\t%s\n' "$f" base-size "$res" 1 >> "$work/results.tsv"
+    fi
   fi
 
   # ---- ExifTool locates the second MPF image: its bytes must be the gain-map JPEG. No
@@ -227,7 +242,7 @@ awk -F'\t' -v known="$here/known-differences.tsv" -v diffs="$report/differences.
 BEGIN {
   while ((getline line < known) > 0) {
     if (line ~ /^#/ || line == "") continue
-    split(line, p, "\t"); k[p[1] SUBSEP p[2]] = 1
+    split(line, p, "\t"); k[p[1] SUBSEP p[2]] = 1; want[p[1] SUBSEP p[2]] = p[4]
   }
   print "file\tchannel\tresult" > diffs
 }
@@ -238,14 +253,14 @@ BEGIN {
   if ($4 == 1) okc[ch]++
   if (res == "equal") { eq[ch]++; next }
   base = ch; sub(/-.*/, "", base)
-  if ((f SUBSEP ch) in k) { kn[ch]++; used[f SUBSEP ch] = 1 }
+  if ((f SUBSEP ch) in k && (ch != "avif" || want[f SUBSEP ch] == $5)) { kn[ch]++; used[f SUBSEP ch] = 1 }
   else if ((f SUBSEP base) in k) { kn[ch]++; used[f SUBSEP base] = 1 }
   else { df[ch]++; nd++; print f "\t" ch "\t" res > diffs }
 }
 END {
   print "| channel | inputs | ok | equal | differ | known | n/a |"
   print "|---|---:|---:|---:|---:|---:|---:|"
-  n = split("uhdr-txt uhdr-dims uhdr-base-jpg uhdr-gm-jpg uhdr-base-rgba uhdr-gm-raw avif turbo-base-rgba turbo-gm-raw exiftool-mpimage2", chs, " ")
+  n = split("uhdr-txt uhdr-dims uhdr-base-jpg uhdr-gm-jpg uhdr-base-rgba uhdr-gm-raw avif turbo-base-rgba turbo-gm-raw base-prefix base-size exiftool-mpimage2", chs, " ")
   for (i = 1; i <= n; i++) { c = chs[i]; printf "| %s | %d | %d | %d | %d | %d | %d |\n", c, inputs[c], okc[c], eq[c], df[c], kn[c], na[c] }
   unused = 0
   for (key in k) if (!(key in used)) { split(key, kk, SUBSEP); if (kk[2] != "xmp") unused++ }
