@@ -24,6 +24,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <libheif/heif.h>
+#include <libheif/heif_properties.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
