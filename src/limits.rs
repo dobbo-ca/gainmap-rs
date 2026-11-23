@@ -4,13 +4,14 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     /// The peak working memory of one call, in bytes (default 1 GiB), all threads together and
-    /// including the nested calls into `jpeg`, `exif` and `isobmff`, which get what is left.
-    /// Every buffer whose size comes from the input is charged before it is allocated. More is
+    /// including the nested calls into `jpeg`, `exif`, `isobmff`, `hevc` and `av1`, which get what is
+    /// left. Every buffer whose size comes from the input is charged before it is allocated. More is
     /// [`Error::LimitExceeded`](crate::Error::LimitExceeded)`(`[`Limit::Alloc`](crate::Limit::Alloc)`)`.
     pub max_alloc: usize,
     /// The most OS threads one call uses, including the calling thread (default
-    /// `std::thread::available_parallelism()`). This crate spawns none; the JPEG decode of
-    /// [`decode`](crate::decode) passes the value on to `jpeg`. 1 runs on the calling thread.
+    /// `std::thread::available_parallelism()`). This crate spawns none; the decode of
+    /// [`decode`](crate::decode) passes the value on to `jpeg` and `av1` (`hevc` decodes serially).
+    /// 1 runs on the calling thread.
     pub max_threads: usize,
     /// The most pixels (width times height) of one image (default 2^30).
     /// [`Limit::Pixels`](crate::Limit::Pixels).

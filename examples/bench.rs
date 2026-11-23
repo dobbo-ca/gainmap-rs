@@ -10,7 +10,7 @@ use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
-use gainmap::{GainMapImage, Limits};
+use gainmap::{Codec, GainMapImage, Limits};
 
 /// Best of three rounds of `f`, in milliseconds.
 fn best_of_three(mut f: impl FnMut()) -> f64 {
@@ -57,8 +57,8 @@ fn main() -> ExitCode {
         }
     });
 
-    // The files that read with a gain map; HEIF and AVIF files decode to `Unsupported` and are
-    // left out (no codec yet).
+    // The files that read with a gain map. Only the JPEGs are timed: the libultrahdr side of the
+    // comparison decodes JPEGs only.
     let parsed: Vec<(&Vec<u8>, GainMapImage)> = files
         .iter()
         .filter_map(|f| {
@@ -68,7 +68,9 @@ fn main() -> ExitCode {
         .collect();
     let decodable: Vec<&(&Vec<u8>, GainMapImage)> = parsed
         .iter()
-        .filter(|(f, image)| gainmap::decode(f, image, &one, &cancel).is_ok())
+        .filter(|(f, image)| {
+            image.base.codec == Codec::Jpeg && gainmap::decode(f, image, &one, &cancel).is_ok()
+        })
         .collect();
     let decode = |limits: &Limits| {
         best_of_three(|| {

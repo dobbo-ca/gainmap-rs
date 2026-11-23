@@ -1,12 +1,13 @@
 # Parity
 
-There is no Go original for this crate. Three C tools are the oracles. They run only in CI,
+There is no Go original for this crate. Four C and C++ libraries are the oracles. They run only in CI,
 never on a developer machine, and are never a dependency of the crate.
 
 | Oracle | Version (tag, commit) | What it checks |
 |---|---|---|
 | libultrahdr + libjpeg-turbo | v2.0.2 `e5f5a022fe96`, 3.2.0 `c85e6b905bf2` | JPEG: the gain-map metadata (bit for bit), the coded base image and gain map, and their decoded pixels |
-| libavif (no codec) | v1.4.2 `c5240fc79fe5` | AVIF: the gain-map metadata as stored fractions |
+| libavif with dav1d | v1.4.2 `c5240fc79fe5`, dav1d 1.0.0 (Debian bookworm) | AVIF: the gain-map metadata as stored fractions, and the decoded base and gain-map planes with their transforms |
+| libheif with libde265 | v1.23.7 `12a259a5882d`, v1.0.15 `17bb8d9fcea6` | HEIC: the decoded base and gain-map planes (by item id) with their transforms |
 | ExifTool | 13.64 `3d7a0538324e` | JPEG: the `hdrgm` and `HDRGainMap` XMP values |
 
 All are built from source in `.github/ci/build-oracle-libs.sh`, each checked out by tag and by
@@ -17,11 +18,12 @@ request: job `parity` (all channels) and job `parity-arm64`. A crate is done whe
 
 ## The Rust side
 
-`examples/oracle.rs` has four commands. It uses `gainmap` and the standard library only.
+`examples/oracle.rs` has five commands. It uses `gainmap`, `isobmff` (the transform types) and the standard library only.
 
 ```
 oracle uhdr <in-dir> <out-dir> [--no-raw]
 oracle avif <in-dir> <out-dir>
+oracle planes <in-dir> <out-dir>
 oracle xmp  <in-dir> <out.jsonl>
 oracle gen  <in-dir> <out-dir>
 ```
@@ -192,7 +194,7 @@ whatever else the shared cache holds, and `fetch.sh` checks size and SHA-256 of 
 on every run. Channels: `uhdr-txt` (the status line and the metadata lines), `uhdr-dims` (the
 base and gain-map sizes and the channel count, lines 2 to 6; compared only when libultrahdr read
 the file), `uhdr-base-jpg`, `uhdr-gm-jpg`, `uhdr-base-rgba`, `uhdr-gm-raw`, `avif`,
-`turbo-base-rgba`, `turbo-gm-raw`, `base-prefix`, `base-size`, `exiftool-mpimage2` and `xmp`.
+`turbo-base-rgba`, `turbo-gm-raw`, `base-prefix`, `base-size`, `exiftool-mpimage2`, `xmp` and the eight pixel channels `heifpix-*` and `avifpix-*` (see `planes`).
 The report (`summary.md`) has, per channel, the counts inputs, ok (the C tool produced it), equal, differ, known and n/a. It also
 has the Rust status of every input and the sweep result.
 
@@ -218,6 +220,70 @@ tools:
   libultrahdr reads. If ExifTool succeeds and gives no `MPImage2` (no MPF, for example a
   Google-container-only file) the result is `n/a` and is not a difference. An ExifTool that
   exits with an error is a failure of the run (`failures.tsv`) and a difference, never `n/a`.
+
+### `planes`: HEIC and AVIF pixels
+
+`oracle planes <in-dir> <out-dir>` decodes, for every HEIF and AVIF input, the base image and the
+gain map (each alone, as the base of a copy of the read result, so one failure does not hide the
+other) and writes, for `<which>` = `base`, `gm`:
+
+- `<f>.<which>.yuv`: the planes Y, Cb, Cr (Y only for 4:0:0), tight rows, one byte per sample at
+  bit depth 8, else two bytes little-endian. No colour conversion, no transform applied.
+- `<f>.<which>.info`: `W H chroma depthY depthC` (chroma 400, 420, 422 or 444; for 4:0:0 depthC is
+  depthY), then the transforms, kind by kind in this order: `crop L T R B` (the borders; `crop
+  inexact` when the `clap` is not an exact integer rectangle), `imir axis` (the raw `axis` byte:
+  0 top and bottom swap, 1 left and right swap) and `irot degrees` (anticlockwise). The order
+  across kinds is fixed because libavif cannot report the `ipma` order; the raw `ipma` order is in
+  `Planes::transforms`.
+- `<f>.ids`: the item ids that gainmap reports (`base N`, `gm N`), which the libheif oracle
+  decodes; `<f>.<which>.err` with the error class when the decode failed; `<f>.txt`.
+
+The same command also checks, for every image it decodes, that `decode` gives the identical result
+for `max_threads` 1, 2 and 3, `Cancelled` with the flag set, `LimitExceeded(Alloc)` under half of
+what the result holds and `LimitExceeded(Pixels)` one pixel under the image, and that decoding
+the base and the gain map together gives what each gives alone. A failed check is a non-zero
+exit, which `run.sh` records as a failure of the run (`planes-rust`).
+
+The C tools write the same files:
+
+- `tests/parity/heif_oracle.c` (libheif v1.23.7 with libde265 v1.0.15, static): for each id in
+  `<f>.ids` it calls `heif_context_get_image_handle`, which finds hidden and auxiliary items, and
+  decodes with `ignore_transformations = 1`, an undefined colour space and chroma (the stored
+  format is kept) and `output_image_nclx_profile_passthrough` (no range conversion), as hevc-rs's
+  oracle does. The transforms come from `heif_item_get_transformation_properties` and the
+  property getters (the crop as libheif's borders for the image size). The ids come from
+  gainmap because libheif v1.23.7 has no `tmap` support.
+- `tests/parity/avif_oracle.c` (libavif v1.4.2 with dav1d, built with the system dav1d of Debian
+  bookworm): `avifDecoderNextImage` with `COLOR_AND_ALPHA | GAIN_MAP`, then the Y, U, V planes of
+  `image` and of `gainMap->image` and `transformFlags`, `clap` (through
+  `avifCropRectFromCleanApertureBox`), `irot` and `imir`.
+
+Why the transforms are not applied and libheif is not run with them on is in docs/design.md.
+
+Channels (each compares the `.info` or `.yuv` file of the C tool with the Rust one with `cmp`):
+`heifpix-base-info`, `heifpix-base-yuv`, `heifpix-gm-info`, `heifpix-gm-yuv` (HEIC, libheif) and
+`avifpix-base-info`, `avifpix-base-yuv`, `avifpix-gm-info`, `avifpix-gm-yuv` (AVIF, libavif). A
+known-differences line for `avifpix-gm` covers the gm channels and nothing else; the bare
+`avifpix` would also hide the base image, so it is not used.
+
+Where libavif or libheif cannot give planes for a file, the file is in `known-differences.tsv`
+with the reason, and only that image is left unchecked:
+
+- libavif ignores the gain map of the eight Adobe-aux AVIFs (`auxl` type
+  `urn:com:photo:aux:hdrgainmap`), of `seine_sdr_gainmap_notmapbrand.avif`,
+  `seine_hdr_gainmap_wrongaltr.avif`, `unsupported_gainmap_version.avif`,
+  `unsupported_gainmap_minimum_version.avif` and
+  `unsupported_gainmap_writer_version_with_extra_bytes.avif`. Their gain-map planes are decoded
+  by gainmap only. Their base planes are compared.
+- libavif fails the parse of `seine_sdr_gainmap_gammazero.avif` and
+  `supported_gainmap_writer_version_with_extra_bytes.avif`, so it decodes neither image.
+
+Known limits of this comparison: a `clap` that is not an exact integer rectangle is `crop
+inexact` for gainmap and libavif but rounded by libheif, so such a HEIC would differ in `.info`
+(none is in the corpus: the libultrahdr HEIC has `clap` 16x16 at offset -24/-24 on 64x64, which
+is exact); more than one `irot`, `imir` or `clap` on an item is an error in libheif even with
+transforms ignored, and gainmap returns them all. The gain-map planes of a HEIC `tmap` file are
+decoded from the item id gainmap reports, not found by libheif itself.
 
 ### Never-drop gates
 
@@ -254,11 +320,11 @@ expected to use; if it names or places them differently, the first run shows it 
 
 The gate (`/report/status` is 0) needs all of this:
 
-- the corpus is complete (47 inputs) and the C tools ran for every file;
+- the corpus is complete (56 inputs) and the C tools ran for every file;
 - no difference outside `known-differences.tsv`, in any channel, and no gain-map gate failure;
 - at least 15 `uhdr-txt` files (libultrahdr read them and the text is equal), 8 `avif` files
   (libavif read them and the text is equal) and 10 `exiftool-mpimage2` files are equal, so a
-  run that compared nothing, or where both sides refused every file, fails;
+  run that compared nothing, or where both sides refused every file, fails; and at least 2 `heifpix-base-yuv`, 2 `heifpix-gm-yuv`, 10 `avifpix-base-yuv` and 6 `avifpix-gm-yuv` files are equal;
 - no ExifTool failure (a non-zero exit of any ExifTool run);
 - the no-crash sweep has no panic, abort, hang or tool failure. Every mutation goes through
   `oracle uhdr --no-raw` and `oracle xmp`, one batch per input; on a failure the files are tried
@@ -268,7 +334,7 @@ The gate (`/report/status` is 0) needs all of this:
 `known-differences.tsv` (file, channel, reason, and for `avif` the expected Rust outcome) lists documented, expected deviations only.
 Channel `uhdr` covers every `uhdr-*` channel of the file (likewise `turbo`, `exiftool`). A line
 that is not used is counted in the summary. Each line needs its reason before it is listed. Today
-there are eleven:
+there are eleven for the metadata, pixel and XMP channels, and 17 for the pixel channels (the gm channels of 13 AVIFs, and both channels of two more, listed under `planes`):
 
 - The five JPEGs with `rdf:Seq` XMP (`paris_exif_xmp_gainmap_bigendian.jpg`,
   `paris_exif_xmp_gainmap_littleendian.jpg`, `paris_exif_xmp_icc_gainmap_bigendian.jpg`,
@@ -321,7 +387,7 @@ These are known from its sources (v2.0.2); none was run.
 ## parity-arm64
 
 `tests/parity/arm64.sh` builds the oracle for x86_64 and for aarch64 (run under `qemu-user`),
-and runs `uhdr`, `avif` and `xmp` over every 4th input with both; the output dirs are compared
+and runs `uhdr`, `avif`, `planes` and `xmp` over every 4th input with both; the output dirs are compared
 with `diff -r` and must be identical. This covers jpeg-rs's NEON and AVX2 decode paths and the
 `libm` `exp2` / `exp2f` of the two architectures. If a text file ever differs by one bit in an
 `exp2` line only, the cause is the `libm` of the two targets (glibc picks an FMA variant on
@@ -331,9 +397,9 @@ x86_64); say so here and decide then.
 
 - The apply step (`HDR = (sdr + offset) * gain - offset`): the crate does not apply the gain map
   in v1 (docs/design.md).
-- HEIC pixels (no HEVC decoder yet). The HEIC has no libavif or libultrahdr channel (both refuse
+- HDR rendering of HEIC and AVIF (docs/design.md). The HEIC has no libavif or libultrahdr channel (both refuse
   it); it is gated by ExifTool and the never-drop gates (see "HEIC" above).
-- libheif: its `tmap` support is an open pull request, so it is not an oracle.
+- libheif has no `tmap` support (an open pull request), so the HEIC gain-map item is decoded by the id gainmap reports; how gainmap finds that item is gated by ExifTool and the never-drop gates.
 
 ## Licences of what is ported
 

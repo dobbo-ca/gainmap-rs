@@ -36,7 +36,7 @@ jobs:
           app-id: ${{ vars.CI_READ_APP_ID }}
           private-key: ${{ secrets.CI_READ_APP_KEY }}
           owner: dobbo-ca
-          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs
+          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs,hevc-rs,av1-rs
           permission-contents: read
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:

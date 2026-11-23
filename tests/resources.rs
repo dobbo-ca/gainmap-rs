@@ -364,7 +364,7 @@ fn decode_peak_within_max_alloc() {
     let img = gainmap::read(&data, &limits_of(1 << 30, 1), &no_cancel()).unwrap();
     let want = gainmap::decode(&data, &img, &limits_of(1 << 30, 1), &no_cancel()).unwrap();
     let base_bytes = BIG_BASE * BIG_BASE * 4;
-    assert_eq!(want.base.data.len(), base_bytes);
+    assert_eq!(want.base.as_pixels().unwrap().data.len(), base_bytes);
     for t in [1, 2] {
         let run = |cap: usize| {
             let lim = limits_of(cap, t);

@@ -1,6 +1,6 @@
 # CI image: Rust runs here, on the in-cluster BuildKit, because the ARC runner has no toolchain.
-# The crate depends on three private dobbo-ca ports by git rev (jpeg-rs, exif-rs, isobmff-rs), and
-# those depend on a fourth (deflate-rs). The fetch is the only step that needs the GitHub App
+# The crate depends on five private dobbo-ca ports by git rev (jpeg-rs, exif-rs, isobmff-rs, hevc-rs,
+# av1-rs), and those depend on a sixth (deflate-rs). The fetch is the only step that needs the GitHub App
 # token, passed as the BuildKit secret `gh_token` (never a build arg, never written to a layer);
 # every later step runs offline. jpeg-rs also pulls rayon from crates.io, and the fuzz crate pulls
 # libfuzzer-sys, so the same step fetches the registry crates too.
@@ -44,6 +44,10 @@ RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
 RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
     find src examples tests -name '*.rs' -exec touch {} + && cargo test --locked
 RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
+    find src examples tests -name '*.rs' -exec touch {} + && cargo clippy --locked --keep-going --all-targets --no-default-features -- -D warnings
+RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
+    find src examples tests -name '*.rs' -exec touch {} + && cargo test --locked --no-default-features
+RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
     find src examples tests -name '*.rs' -exec touch {} + && cargo build --locked --release --target aarch64-unknown-linux-gnu
 # The fuzz crate (libfuzzer-sys) has to compile; fuzz.yml runs its targets.
 RUN --mount=type=cache,id=gainmap-fuzz-target,target=/src/tests/fuzz/target,sharing=locked \
@@ -70,27 +74,32 @@ RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
     find src examples tests -name '*.rs' -exec touch {} + && cargo test --locked --release --target aarch64-unknown-linux-gnu
 
 # The parity oracles, built from source, each pinned by tag and commit (docs/parity.md):
-# libjpeg-turbo 3.2.0, libultrahdr v2.0.2, libavif v1.4.2 (no codec) and ExifTool 13.64. CI-only,
+# libjpeg-turbo 3.2.0, libultrahdr v2.0.2, libavif v1.4.2 (with dav1d), libde265 v1.0.15, libheif v1.23.7
+# and ExifTool 13.64. CI-only,
 # installed before `COPY . .`; never a crate dependency. The script is the only file this stage
 # copies, so a commit that leaves it alone does not build them again.
 FROM toolchain AS oracle-libs
-RUN apt-get update && apt-get install -y --no-install-recommends cmake g++ make git ca-certificates curl \
+RUN apt-get update && apt-get install -y --no-install-recommends cmake g++ make git ca-certificates curl pkg-config libdav1d-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY .github/ci/build-oracle-libs.sh /build-oracle-libs.sh
 RUN sh /build-oracle-libs.sh
 
-# The two C tools of tests/parity (uhdr_oracle.cpp, avif_oracle.c) and python3 for compare.py;
+# The three C tools of tests/parity (uhdr_oracle.cpp, avif_oracle.c, heif_oracle.c) and python3 for compare.py;
 # perl is in the base image. Only the two sources are copied, so the tools are rebuilt only when
 # they change. libjpeg and libturbojpeg come from /opt/oracle, not from the bookworm libjpeg-dev.
 FROM oracle-libs AS oracle-tools
 RUN apt-get update && apt-get install -y --no-install-recommends python3 \
     && rm -rf /var/lib/apt/lists/*
-COPY tests/parity/uhdr_oracle.cpp tests/parity/avif_oracle.c /oracle-src/
+COPY tests/parity/uhdr_oracle.cpp tests/parity/avif_oracle.c tests/parity/heif_oracle.c /oracle-src/
 RUN mkdir -p /opt/oracle/bin \
     && g++ -O2 -std=c++17 -I/opt/oracle/include /oracle-src/uhdr_oracle.cpp -o /opt/oracle/bin/uhdr_oracle \
        /opt/oracle/lib/libuhdr.a /opt/oracle/lib/libturbojpeg.a /opt/oracle/lib/libjpeg.a -lpthread \
     && gcc -O2 -std=gnu11 -I/opt/oracle/include /oracle-src/avif_oracle.c -o /opt/oracle/bin/avif_oracle \
-       /opt/oracle/lib/libavif.a -lm -lpthread
+       /opt/oracle/lib/libavif.a /usr/lib/x86_64-linux-gnu/libdav1d.a -lm -lpthread -ldl \
+    && export PKG_CONFIG_PATH=/opt/oracle/lib/pkgconfig \
+    && pkg-config --static --libs libheif | grep -q de265 \
+    && gcc -O2 -std=gnu99 -Wall -c -o /tmp/heif_oracle.o /oracle-src/heif_oracle.c $(pkg-config --cflags libheif) \
+    && g++ -o /opt/oracle/bin/heif_oracle /tmp/heif_oracle.o -static-libstdc++ -static-libgcc $(pkg-config --static --libs libheif)
 
 # Parity: fetch.sh puts the public corpus into the shared /corpus cache mount (once per BuildKit
 # cache), run.sh compares examples/oracle.rs with libultrahdr + libjpeg-turbo (pixels and metadata),
@@ -116,7 +125,7 @@ FROM scratch AS parity-report
 COPY --from=parity /report /
 
 # The same oracle example built for x86_64 and for aarch64 (run under qemu-user) reads every 4th
-# input; `oracle uhdr`, `avif` and `xmp` outputs (text, coded bytes and pixels) must be
+# input; `oracle uhdr`, `avif`, `planes` and `xmp` outputs (text, coded bytes and pixels) must be
 # byte-identical. The outputs of one input are deleted before the next, so the layer stays small.
 FROM qemu-tools AS parity-arm64
 COPY --from=deps /usr/local/cargo/registry /usr/local/cargo/registry

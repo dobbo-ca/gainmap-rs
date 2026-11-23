@@ -1,5 +1,5 @@
 # name	url	licence	sha256	size
-# Public files with a clear licence only (docs/corpus.md). every file is pinned by sha256 and size (taken from the first CI fetch, run 45223589782).
+# Public files with a clear licence only (docs/corpus.md). Every file is pinned by sha256 and size (taken from the first CI fetch, run 45223589782), except the nine added with the HEIF/AVIF decode (uhdr_gainmap_hevc_16x16.heic and the Adobe-aux AVIFs): they are "-" until the first CI fetch prints their values.
 apple_gainmap_new.jpg	https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/apple_gainmap_new.jpg	BSD-2-Clause	492a94bd0636bcf15b3f560c68142a7783936c1597e78b0d0461d8be7fddc078	50824
 apple_gainmap_old.jpg	https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/apple_gainmap_old.jpg	BSD-2-Clause	2e4310a0dd37a98678e057e25d936bbc4f936bb6fe17380c0ce99e58ecaa603b	50742
 color_grid_alpha_grid_gainmap_nogrid.avif	https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/color_grid_alpha_grid_gainmap_nogrid.avif	BSD-2-Clause	c424c43fe4bab3b8ef37b86c0bab3851b850b94e5d46b9fae979586dae45de0a	2870
@@ -47,3 +47,12 @@ commons_saint_marys_park.jpg	https://upload.wikimedia.org/wikipedia/commons/3/3d
 commons_shipwrights_cottage.jpg	https://upload.wikimedia.org/wikipedia/commons/1/12/Shipwright%27s_Cottage_in_India_Basin%2C_San_Francisco%2C_California%2C_US.jpg	CC-BY-SA-4.0	3e43fb86ffe82c4c5176bdf391f694a680ccf514cd196424f43a6a3608f06705	7120769
 commons_stony_hill.jpg	https://upload.wikimedia.org/wikipedia/commons/5/5b/Stony_Hill_seen_from_Bernal_Heights%2C_San_Francisco%2C_California%2C_US.jpg	CC-BY-SA-4.0	dfaf1dc224ef2856ad671df89fa7d6f9cdd17b22e04554e3ba4b43e599d36898	2355455
 apple_hdr_sample.heic	https://media.githubusercontent.com/media/johncf/apple-hdr-heic/e64716c29abc91a3b40543d7c47fb0f526608982/tests/data/hdr-sample.heic	MIT	c690fa4ecc6ae71ee9a926de869a95835a5d41e764ccbc200647e2fb9d0800cc	238982
+uhdr_gainmap_hevc_16x16.heic	https://raw.githubusercontent.com/google/libultrahdr/66821e0a261aa3a06c0e7c889f52eced52850be1/tests/data/gainmap_hevc_16x16.heic	Apache-2.0 OR MIT	-	-
+colors_hdr_p3.avif	https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/colors_hdr_p3.avif	BSD-2-Clause	-	-
+colors_hdr_rec2020.avif	https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/colors_hdr_rec2020.avif	BSD-2-Clause	-	-
+colors_hdr_srgb.avif	https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/colors_hdr_srgb.avif	BSD-2-Clause	-	-
+colors_text_hdr_p3.avif	https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/colors_text_hdr_p3.avif	BSD-2-Clause	-	-
+colors_text_hdr_rec2020.avif	https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/colors_text_hdr_rec2020.avif	BSD-2-Clause	-	-
+colors_text_hdr_srgb.avif	https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/colors_text_hdr_srgb.avif	BSD-2-Clause	-	-
+colors_text_wcg_hdr_rec2020.avif	https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/colors_text_wcg_hdr_rec2020.avif	BSD-2-Clause	-	-
+seine_hdr_srgb.avif	https://raw.githubusercontent.com/AOMediaCodec/libavif/v1.4.2/tests/data/seine_hdr_srgb.avif	BSD-2-Clause	-	-

@@ -1,27 +1,45 @@
-//! Pixel decode of the base image and the gain map (JPEG only for now).
+//! Pixel decode of the base image and the gain map: JPEG to pixels, HEIC (HEVC) and AVIF (AV1) to
+//! coded planes.
 
 use std::sync::atomic::AtomicBool;
 
 use jpeg::{DecodeOptions, Format, Image};
 
 use crate::budget::Budget;
-use crate::{Codec, CodedImage, Decoded, Error, GainMapImage, Limits, Location, Pixels};
+#[cfg(any(feature = "heif", feature = "avif"))]
+use crate::{Chroma, CodecMetadata, Plane, Planes, Samples};
+use crate::{Codec, CodedImage, Decoded, Error, GainMapImage, Limits, Location, Picture, Pixels};
 
-/// Decodes the base image to RGBA and the gain map to gray (1 component) or RGBA (3 components).
-/// The base pixels stay alive while the gain map decodes, so the gain map gets the budget that is
-/// left. Both decodes run one after the other; each uses up to `limits.max_threads` threads
-/// inside `jpeg`.
+/// The pixel cap that `hevc` and `av1` were built and fuzzed with. A larger `max_pixels` of ours
+/// is lowered to it for those two.
+#[cfg(any(feature = "heif", feature = "avif"))]
+const CODEC_MAX_PIXELS: u64 = 1 << 28;
+
+/// Decodes the base image and the gain map. A JPEG gives [`Picture::Pixels`]: the base as RGBA,
+/// the gain map as gray (1 component) or RGBA (3 components). An HEIC or AVIF image gives
+/// [`Picture::Planes`]: the coded Y, Cb and Cr planes at their bit depth and chroma format,
+/// with the transforms, the `colr` properties and the codec metadata attached and nothing
+/// converted or applied.
+///
+/// The base stays alive while the gain map decodes, so the gain map gets the budget that is
+/// left: each codec runs under `max_alloc` minus what the first picture holds, and the planes
+/// it returns are charged to it. The two decodes run one after the other; each uses up to
+/// `limits.max_threads` threads inside `jpeg` or `av1` (`hevc` decodes on the calling thread).
+/// `max_pixels` is the smaller of ours and 2^28, the cap of `hevc` and `av1`; their width and
+/// height defaults apply.
 ///
 /// A JPEG that decodes with an error beside its pixels (`jpeg::Decoded::error`, a truncated scan)
 /// is an error here: [`Error::Jpeg`].
 ///
 /// # Errors
 ///
-/// [`Error::Unsupported`] (`"hevc decode"` or `"av1 decode"`) for HEIF and AVIF until the HEVC
-/// and AV1 decoders exist; [`Error::Malformed`] when `image` has no byte range;
+/// [`Error::Unsupported`] (`"hevc decode"` or `"av1 decode"`) when the Cargo feature `heif` or
+/// `avif` is off; [`Error::Malformed`] when `image` has no byte range or item id;
 /// [`Error::Truncated`] when the range is not inside `data`; [`Error::LimitExceeded`] for
-/// `max_alloc` and `max_pixels`; [`Error::OutOfMemory`]; [`Error::Cancelled`] (checked between
-/// the two decodes and by `jpeg` per MCU row); [`Error::Jpeg`] for the other decoder errors.
+/// `max_alloc` and `max_pixels` (the `hevc` and `av1` limit errors map to these);
+/// [`Error::OutOfMemory`]; [`Error::Cancelled`] (checked between the two decodes and by the
+/// codec inside each); [`Error::Heif`], [`Error::Jpeg`], [`Error::Hevc`] and [`Error::Av1`] for
+/// the other errors. `data` must be the input that [`read`](crate::read) got.
 pub fn decode(
     data: &[u8],
     image: &GainMapImage,
@@ -34,24 +52,266 @@ pub fn decode(
     for img in std::iter::once(&image.base).chain(gain) {
         match img.codec {
             Codec::Jpeg => {}
+            #[cfg(not(feature = "heif"))]
             Codec::Hevc => return Err(Error::Unsupported("hevc decode")),
+            #[cfg(not(feature = "avif"))]
             Codec::Av1 => return Err(Error::Unsupported("av1 decode")),
+            #[cfg(feature = "heif")]
+            Codec::Hevc => {}
+            #[cfg(feature = "avif")]
+            Codec::Av1 => {}
         }
     }
-    let base = decode_jpeg(data, &image.base, Format::Rgba, limits, &budget)?;
+    let base = decode_one(data, image, &image.base, false, limits, &budget)?;
     budget.check_cancel()?;
     let gain_map = match gain {
-        Some(g) => {
-            let format = if g.components == 1 {
+        Some(g) => Some(decode_one(data, image, g, true, limits, &budget)?),
+        None => None,
+    };
+    Ok(Decoded { base, gain_map })
+}
+
+/// Decodes one coded image by its codec.
+fn decode_one(
+    data: &[u8],
+    whole: &GainMapImage,
+    img: &CodedImage,
+    is_gain_map: bool,
+    limits: &Limits,
+    budget: &Budget<'_>,
+) -> Result<Picture, Error> {
+    match img.codec {
+        Codec::Jpeg => {
+            let format = if is_gain_map && img.components == 1 {
                 Format::Gray
             } else {
                 Format::Rgba
             };
-            Some(decode_jpeg(data, g, format, limits, &budget)?)
+            decode_jpeg(data, img, format, limits, budget).map(Picture::Pixels)
         }
-        None => None,
+        #[cfg(feature = "heif")]
+        Codec::Hevc => {
+            let (heif, id, item) = heif_item(whole, img, limits, budget)?;
+            hevc_planes(data, heif, id, item, limits, budget).map(Picture::Planes)
+        }
+        #[cfg(not(feature = "heif"))]
+        Codec::Hevc => {
+            let _ = whole;
+            Err(Error::Unsupported("hevc decode"))
+        }
+        #[cfg(feature = "avif")]
+        Codec::Av1 => {
+            let (heif, id, item) = heif_item(whole, img, limits, budget)?;
+            av1_planes(data, heif, id, item, limits, budget).map(Picture::Planes)
+        }
+        #[cfg(not(feature = "avif"))]
+        Codec::Av1 => {
+            let _ = whole;
+            Err(Error::Unsupported("av1 decode"))
+        }
+    }
+}
+
+/// The graph, the item id and the parsed item (for its transforms and colours) of a HEIF image.
+#[cfg(any(feature = "heif", feature = "avif"))]
+fn heif_item<'a>(
+    whole: &'a GainMapImage,
+    img: &CodedImage,
+    limits: &Limits,
+    budget: &Budget<'_>,
+) -> Result<(&'a isobmff::Heif, u32, isobmff::Image), Error> {
+    let heif = whole.heif.as_ref().ok_or(Error::Malformed("location"))?;
+    let Location::Item(id) = img.location else {
+        return Err(Error::Malformed("location"));
     };
-    Ok(Decoded { base, gain_map })
+    let item = crate::heif::checked_image(heif, id, limits, budget)?;
+    Ok((heif, id, item))
+}
+
+/// The `max_pixels` to pass to a codec.
+#[cfg(any(feature = "heif", feature = "avif"))]
+fn codec_pixels(limits: &Limits) -> u64 {
+    limits.max_pixels.min(CODEC_MAX_PIXELS)
+}
+
+#[cfg(feature = "heif")]
+fn hevc_planes(
+    data: &[u8],
+    heif: &isobmff::Heif,
+    id: u32,
+    item: isobmff::Image,
+    limits: &Limits,
+    budget: &Budget<'_>,
+) -> Result<Planes, Error> {
+    let nested = hevc::Limits {
+        max_alloc: budget.remaining(),
+        max_threads: limits.max_threads,
+        max_pixels: codec_pixels(limits),
+        ..hevc::Limits::default()
+    };
+    let pic = hevc::decode_heic_item(
+        heif,
+        data,
+        id,
+        &hevc::Options::default(),
+        &nested,
+        budget.cancel(),
+    )?;
+    // The codec ran under what was left, so the picture fits; charge it so the next decode runs
+    // under the rest.
+    let mut held = pic.sei.len().saturating_mul(size_of::<CodecMetadata>());
+    for m in &pic.sei {
+        held = held.saturating_add(m.payload.len());
+    }
+    for p in &pic.planes {
+        held = held.saturating_add(match &p.samples {
+            hevc::Samples::U8(v) => v.len(),
+            hevc::Samples::U16(v) => v.len().saturating_mul(2),
+        });
+    }
+    budget.charge(held)?;
+    let chroma = match pic.info.chroma_format {
+        hevc::ChromaFormat::Mono => Chroma::Mono,
+        hevc::ChromaFormat::Yuv420 => Chroma::Yuv420,
+    };
+    let (depth_luma, depth_chroma) = (pic.info.bit_depth_luma, pic.info.bit_depth_chroma);
+    let cicp = pic.info.vui.map(|v| crate::Cicp {
+        primaries: v.colour_primaries,
+        transfer: v.transfer_characteristics,
+        matrix: v.matrix_coeffs,
+        full_range: v.video_full_range,
+    });
+    let metadata = pic
+        .sei
+        .into_iter()
+        .map(|m| CodecMetadata {
+            kind: u64::from(m.payload_type),
+            payload: m.payload,
+        })
+        .collect();
+    let planes: Vec<Plane> = pic
+        .planes
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| Plane {
+            width: p.width,
+            height: p.height,
+            bit_depth: if i == 0 { depth_luma } else { depth_chroma },
+            samples: match p.samples {
+                hevc::Samples::U8(v) => Samples::U8(v),
+                hevc::Samples::U16(v) => Samples::U16(v),
+            },
+        })
+        .collect();
+    finish(planes, chroma, item, cicp, metadata)
+}
+
+#[cfg(feature = "avif")]
+fn av1_planes(
+    data: &[u8],
+    heif: &isobmff::Heif,
+    id: u32,
+    item: isobmff::Image,
+    limits: &Limits,
+    budget: &Budget<'_>,
+) -> Result<Planes, Error> {
+    // `max_metadata` is counted on top of `max_alloc` in `av1`, so it is carved out of what is
+    // left: the two together never pass it.
+    let left = budget.remaining();
+    let max_metadata = left / 16;
+    let max_metadata = max_metadata.min(av1::Limits::default().max_metadata);
+    let nested = av1::Limits {
+        max_alloc: left - max_metadata,
+        max_threads: limits.max_threads,
+        max_pixels: codec_pixels(limits),
+        max_metadata,
+        ..av1::Limits::default()
+    };
+    let frame = av1::decode_avif_item(
+        heif,
+        data,
+        id,
+        &av1::Options::default(),
+        &nested,
+        budget.cancel(),
+    )?;
+    let mut held = frame
+        .metadata
+        .len()
+        .saturating_mul(size_of::<CodecMetadata>());
+    for m in &frame.metadata {
+        held = held.saturating_add(m.payload.len());
+    }
+    for p in &frame.planes {
+        held = held.saturating_add(match &p.data {
+            av1::PlaneData::U8(v) => v.len(),
+            av1::PlaneData::U16(v) => v.len().saturating_mul(2),
+        });
+    }
+    budget.charge(held)?;
+    let chroma = match (frame.mono_chrome, frame.subsampling_x, frame.subsampling_y) {
+        (true, _, _) => Chroma::Mono,
+        (false, true, true) => Chroma::Yuv420,
+        (false, true, false) => Chroma::Yuv422,
+        (false, false, false) => Chroma::Yuv444,
+        // 4:4:0 is not a legal AV1 format.
+        (false, false, true) => return Err(Error::Malformed("av1-chroma")),
+    };
+    let cicp = Some(crate::Cicp {
+        primaries: frame.color.color_primaries,
+        transfer: frame.color.transfer_characteristics,
+        matrix: frame.color.matrix_coefficients,
+        full_range: frame.color.color_range,
+    });
+    let depth = frame.bit_depth;
+    let metadata = frame
+        .metadata
+        .into_iter()
+        .map(|m| CodecMetadata {
+            kind: m.metadata_type,
+            payload: m.payload,
+        })
+        .collect();
+    let planes: Vec<Plane> = frame
+        .planes
+        .into_iter()
+        .map(|p| Plane {
+            width: p.width,
+            height: p.height,
+            bit_depth: depth,
+            samples: match p.data {
+                av1::PlaneData::U8(v) => Samples::U8(v),
+                av1::PlaneData::U16(v) => Samples::U16(v),
+            },
+        })
+        .collect();
+    finish(planes, chroma, item, cicp, metadata)
+}
+
+/// Puts the decoded planes and the properties of the item together.
+#[cfg(any(feature = "heif", feature = "avif"))]
+fn finish(
+    planes: Vec<Plane>,
+    chroma: Chroma,
+    item: isobmff::Image,
+    cicp: Option<crate::Cicp>,
+    metadata: Vec<CodecMetadata>,
+) -> Result<Planes, Error> {
+    let want = if chroma == Chroma::Mono { 1 } else { 3 };
+    let luma = planes.first().ok_or(Error::Malformed("planes"))?;
+    if planes.len() != want {
+        return Err(Error::Malformed("planes"));
+    }
+    Ok(Planes {
+        width: luma.width,
+        height: luma.height,
+        chroma,
+        planes,
+        transforms: item.transforms,
+        colour: item.colour,
+        cicp,
+        metadata,
+    })
 }
 
 /// Decodes one JPEG range into tightly packed pixels. The pixels stay charged to `budget`.

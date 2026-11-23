@@ -7,7 +7,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   # The checks run inside .github/ci/Dockerfile on the in-cluster BuildKit, so the Rust image and the
-  # build cache stay in the cluster. jpeg-rs, exif-rs, isobmff-rs and deflate-rs (a dependency of exif-rs)
+  # build cache stay in the cluster. jpeg-rs, exif-rs, isobmff-rs, hevc-rs, av1-rs and deflate-rs (a dependency of exif-rs)
   # are private: the dobbo-ca-ci-read GitHub App mints a
   # read-only token for those repos, and it reaches the build only as a BuildKit secret. The layers are
   # also saved to the Actions cache (one scope per job), so a restart of buildkitd does not throw
@@ -25,7 +25,7 @@ jobs:
           app-id: ${{ vars.CI_READ_APP_ID }}
           private-key: ${{ secrets.CI_READ_APP_KEY }}
           owner: dobbo-ca
-          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs
+          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs,hevc-rs,av1-rs
           permission-contents: read
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
@@ -59,7 +59,7 @@ jobs:
           app-id: ${{ vars.CI_READ_APP_ID }}
           private-key: ${{ secrets.CI_READ_APP_KEY }}
           owner: dobbo-ca
-          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs
+          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs,hevc-rs,av1-rs
           permission-contents: read
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
@@ -77,7 +77,7 @@ jobs:
           secrets: |
             gh_token=${{ steps.app.outputs.token }}
 
-  # libultrahdr 2.0.2 + libjpeg-turbo 3.2.0, libavif 1.4.2 and ExifTool 13.64 (the oracles) and
+  # libultrahdr 2.0.2 + libjpeg-turbo 3.2.0, libavif 1.4.2 (with dav1d), libheif 1.23.7 (with libde265 1.0.15) and ExifTool 13.64 (the oracles) and
   # examples/oracle.rs read the same public corpus; tests/parity/run.sh
   # compares them and runs the mutations. The report is the artifact parity-report; the job fails when
   # its status is not 0.
@@ -94,7 +94,7 @@ jobs:
           app-id: ${{ vars.CI_READ_APP_ID }}
           private-key: ${{ secrets.CI_READ_APP_KEY }}
           owner: dobbo-ca
-          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs
+          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs,hevc-rs,av1-rs
           permission-contents: read
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
@@ -137,7 +137,7 @@ jobs:
           app-id: ${{ vars.CI_READ_APP_ID }}
           private-key: ${{ secrets.CI_READ_APP_KEY }}
           owner: dobbo-ca
-          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs
+          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs,hevc-rs,av1-rs
           permission-contents: read
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:

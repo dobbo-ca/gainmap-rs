@@ -1,14 +1,12 @@
-// CI-only parity oracle: libavif v1.4.2, built with no codec. Never built on a developer
-// machine and never a dependency of the crate (docs/parity.md).
+// CI-only parity oracle: libavif v1.4.2 with dav1d. Never built on a developer machine and never a
+// dependency of the crate (docs/parity.md).
 //
 //   avif_oracle <in-dir> <out-dir>
 //
 // For every regular file <f> of <in-dir> (sorted) it writes <out-dir>/<f>.txt: the gain-map
 // metadata that avifDecoderParse finds, as fractions, in the format of `oracle avif`
 // (examples/oracle.rs). avifDecoderParse reads the container and the 'tmap' item and fills
-// decoder->image->gainMap when imageContentToDecode has AVIF_IMAGE_CONTENT_GAIN_MAP; a codec
-// is needed only by avifDecoderNextImage (avifDecoderCreateCodecs in src/read.c), which is never
-// called, so the build needs no AV1 decoder.
+// decoder->image->gainMap when imageContentToDecode has AVIF_IMAGE_CONTENT_GAIN_MAP.
 //
 //   status ok | no-gainmap | error
 //   base.width N / base.height N / gainmap.width N / gainmap.height N
@@ -17,7 +15,20 @@
 //   c.min n/d / c.max n/d / c.gamma n/d / c.base_offset n/d / c.alternate_offset n/d   (c = 0, 1, 2)
 //
 // "no-gainmap" is a file libavif parses without a usable gain map (none, an unsupported
-// version, no 'tmap' brand, no 'altr' group). "error" is a parse failure.
+// version, no 'tmap' brand, no 'altr' group, Adobe's auxiliary gain map, which libavif ignores).
+// "error" is a parse failure.
+//
+// Where avifDecoderNextImage succeeds (imageContentToDecode has COLOR_AND_ALPHA and GAIN_MAP) it
+// also writes the decoded planes, raw and in the format of `oracle planes` (examples/oracle.rs):
+//
+//   <f>.base.yuv, <f>.gm.yuv    Y, U, V planes (Y only for 4:0:0), tight rows, 1 byte per sample
+//                               at depth 8, else 2 bytes little-endian
+//   <f>.base.info, <f>.gm.info  "W H chroma depth depth" (chroma 400/420/422/444), then the
+//                               transforms as "crop L T R B" ("crop inexact" when the clap is not
+//                               an exact crop), "imir axis" and "irot degrees", in that order
+//
+// The gain-map file is written only when libavif found a gain map. It takes the transforms of
+// the gain-map image as libavif keeps them (libavif requires them to equal the base image's).
 //
 // This file is part of gainmap-rs (Apache-2.0). It calls the public API of libavif (BSD-2-Clause).
 
@@ -60,6 +71,57 @@ static uint8_t * read_file(const char * path, size_t * size)
     return buf;
 }
 
+/* The planes and the transforms of `image` into <out>/<name>.<which>.yuv and .info. */
+static void dump_image(const char * out, const char * name, const char * which, const avifImage * image)
+{
+    char path[4096];
+    avifPixelFormatInfo info;
+    int chroma, bytes = image->depth > 8 ? 2 : 1;
+    FILE * f;
+    avifGetPixelFormatInfo(image->yuvFormat, &info);
+    chroma = info.monochrome ? 400 : (info.chromaShiftX ? (info.chromaShiftY ? 420 : 422) : 444);
+
+    snprintf(path, sizeof path, "%s/%s.%s.yuv", out, name, which);
+    f = fopen(path, "wb");
+    if (!f) return;
+    for (int p = 0; p < (info.monochrome ? 1 : 3); ++p) {
+        uint32_t w = p ? (image->width + (uint32_t)info.chromaShiftX) >> info.chromaShiftX : image->width;
+        uint32_t h = p ? (image->height + (uint32_t)info.chromaShiftY) >> info.chromaShiftY : image->height;
+        for (uint32_t y = 0; y < h; ++y) {
+            const uint8_t * row = image->yuvPlanes[p] + (size_t)y * image->yuvRowBytes[p];
+            if (bytes == 1) {
+                fwrite(row, 1, w, f);
+            } else {
+                for (uint32_t x = 0; x < w; ++x) {
+                    uint16_t v;
+                    memcpy(&v, row + 2 * (size_t)x, 2);
+                    fputc(v & 0xff, f);
+                    fputc(v >> 8, f);
+                }
+            }
+        }
+    }
+    fclose(f);
+
+    snprintf(path, sizeof path, "%s/%s.%s.info", out, name, which);
+    f = fopen(path, "wb");
+    if (!f) return;
+    fprintf(f, "%u %u %d %u %u\n", image->width, image->height, chroma, image->depth, image->depth);
+    if (image->transformFlags & AVIF_TRANSFORM_CLAP) {
+        avifCropRect r;
+        avifDiagnostics diag;
+        memset(&diag, 0, sizeof diag);
+        if (avifCropRectFromCleanApertureBox(&r, &image->clap, image->width, image->height, &diag)) {
+            fprintf(f, "crop %u %u %u %u\n", r.x, r.y, image->width - r.x - r.width, image->height - r.y - r.height);
+        } else {
+            fprintf(f, "crop inexact\n");
+        }
+    }
+    if (image->transformFlags & AVIF_TRANSFORM_IMIR) fprintf(f, "imir %u\n", image->imir.axis);
+    if (image->transformFlags & AVIF_TRANSFORM_IROT) fprintf(f, "irot %u\n", image->irot.angle * 90u);
+    fclose(f);
+}
+
 static int write_text(const char * path, const char * text)
 {
     FILE * f = fopen(path, "wb");
@@ -69,7 +131,7 @@ static int write_text(const char * path, const char * text)
 }
 
 // The text of one file, written into `text` (`cap` bytes).
-static void describe(const uint8_t * data, size_t size, char * text, size_t cap)
+static void describe(const uint8_t * data, size_t size, char * text, size_t cap, const char * out, const char * name)
 {
     snprintf(text, cap, "status error\n");
     avifDecoder * decoder = avifDecoderCreate();
@@ -79,7 +141,8 @@ static void describe(const uint8_t * data, size_t size, char * text, size_t cap)
     decoder->ignoreExif = AVIF_TRUE;
     decoder->ignoreXMP = AVIF_TRUE;
     decoder->imageContentToDecode = AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA | AVIF_IMAGE_CONTENT_GAIN_MAP;
-    if (avifDecoderSetIOMemory(decoder, data, size) == AVIF_RESULT_OK && avifDecoderParse(decoder) == AVIF_RESULT_OK) {
+    const int parsed = avifDecoderSetIOMemory(decoder, data, size) == AVIF_RESULT_OK && avifDecoderParse(decoder) == AVIF_RESULT_OK;
+    if (parsed) {
         const avifGainMap * gm = decoder->image ? decoder->image->gainMap : NULL;
         if (!gm || !gm->image) {
             snprintf(text, cap, "status no-gainmap\n");
@@ -108,6 +171,12 @@ static void describe(const uint8_t * data, size_t size, char * text, size_t cap)
                                       c, gm->alternateOffset[c].n, gm->alternateOffset[c].d);
             }
         }
+    }
+    // The planes, where libavif can decode them (dav1d). A failure writes nothing.
+    if (parsed && avifDecoderNextImage(decoder) == AVIF_RESULT_OK && decoder->image && decoder->image->yuvPlanes[0]) {
+        dump_image(out, name, "base", decoder->image);
+        const avifGainMap * gm = decoder->image->gainMap;
+        if (gm && gm->image && gm->image->yuvPlanes[0]) dump_image(out, name, "gm", gm->image);
     }
     avifDecoderDestroy(decoder);
 }
@@ -154,7 +223,7 @@ int main(int argc, char ** argv)
             fprintf(stderr, "avif_oracle: cannot read %s\n", names[i]);
             return 1;
         }
-        describe(data, size, text, sizeof text);
+        describe(data, size, text, sizeof text, out, names[i]);
         free(data);
         snprintf(path, sizeof path, "%s/%s.txt", out, names[i]);
         if (!write_text(path, text)) return 1;

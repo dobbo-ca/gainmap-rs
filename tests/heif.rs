@@ -197,3 +197,96 @@ fn multi_extent_xmp_copy_is_charged() {
     let g = read(&data).unwrap().gain_map.unwrap();
     assert_eq!(g.apple.unwrap().headroom.as_deref(), Some("4.5"));
 }
+
+const ADOBE_AUX: &str = "urn:com:photo:aux:hdrgainmap";
+
+/// An AVIF with Adobe's gain map: base 1, gain map 2 (`auxl`, `auxC` Adobe), and the XMP item 3
+/// on the gain map when `xmp` is given.
+fn avif_adobe(xmp: Option<&str>) -> Vec<u8> {
+    let mut s = Heif::new(b"avif");
+    let size = s.prop(ispe(64, 48));
+    let small = s.prop(ispe(32, 24));
+    let cfg = s.prop(av1c());
+    let aux = s.prop(auxc(ADOBE_AUX));
+    s.item(1, b"av01", &[1; 4], &[size, cfg]);
+    s.item(2, b"av01", &[2; 4], &[small, cfg, aux]);
+    if let Some(x) = xmp {
+        s.xmp_item(3, x);
+        s.link(b"cdsc", 3, &[2]);
+    }
+    s.link(b"auxl", 2, &[1]);
+    s.build()
+}
+
+#[test]
+fn adobe_aux_gain_map_with_hdrgm_xmp_is_ultra_hdr() {
+    let img = read(&avif_adobe(Some(&gm_xmp("2", "2.5")))).unwrap();
+    assert_eq!(img.container, Container::Avif);
+    let g = img.gain_map.unwrap();
+    assert_eq!(g.kind, Kind::UltraHdr);
+    assert_eq!(g.image.location, Location::Item(2));
+    assert_eq!((g.image.width, g.image.height), (32, 24));
+    assert!(g.xmp.is_some() && g.apple.is_none() && g.iso.is_none());
+    assert_eq!(g.metadata.unwrap().gain_map_max, [2.0; 3]);
+    assert!(g.issues.is_empty(), "{:?}", g.issues);
+}
+
+#[test]
+fn adobe_aux_gain_map_without_xmp_is_kept() {
+    let g = read(&avif_adobe(None)).unwrap().gain_map.unwrap();
+    assert_eq!(g.kind, Kind::Apple);
+    assert_eq!(g.image.location, Location::Item(2));
+    assert!(g.metadata.is_none());
+    assert_eq!(g.issues, vec!["metadata-missing"]);
+}
+
+#[test]
+fn an_aux_image_of_another_type_is_not_a_gain_map() {
+    let mut s = Heif::new(b"avif");
+    let size = s.prop(ispe(64, 48));
+    let cfg = s.prop(av1c());
+    let aux = s.prop(auxc("urn:example:aux:depth"));
+    s.item(1, b"av01", &[1; 4], &[size, cfg]);
+    s.item(2, b"av01", &[2; 4], &[size, cfg, aux]);
+    s.link(b"auxl", 2, &[1]);
+    assert!(read(&s.build()).unwrap().gain_map.is_none());
+}
+
+#[test]
+fn identity_base_takes_the_codec_of_its_input() {
+    let mut s = Heif::new(b"avif");
+    s.primary = 3;
+    let size = s.prop(ispe(64, 48));
+    let cfg = s.prop(av1c());
+    s.item(1, b"av01", &[1; 4], &[size, cfg]);
+    s.item(3, b"iden", &[], &[size]);
+    s.link(b"dimg", 3, &[1]);
+    let img = read(&s.build()).unwrap();
+    assert_eq!(img.base.codec, Codec::Av1);
+    assert_eq!(img.base.location, Location::Item(3));
+    assert_eq!(
+        (img.base.width, img.base.height, img.base.components),
+        (64, 48, 3)
+    );
+}
+
+#[test]
+fn identity_gain_map_takes_the_codec_of_its_input() {
+    let mut s = Heif::new(b"avif");
+    s.primary = 3;
+    let size = s.prop(ispe(64, 48));
+    let small = s.prop(ispe(32, 24));
+    let cfg = s.prop(av1c());
+    s.item(1, b"av01", &[1; 4], &[size, cfg]);
+    s.item(2, b"av01", &[2; 4], &[small, cfg]);
+    s.item(3, b"tmap", &tmap_payload(0), &[]);
+    s.item(4, b"iden", &[], &[small]);
+    s.link(b"dimg", 3, &[1, 4]);
+    s.link(b"dimg", 4, &[2]);
+    s.group(b"altr", 100, &[3, 1]);
+    let g = read(&s.build()).unwrap().gain_map.unwrap();
+    assert_eq!(g.image.location, Location::Item(4));
+    assert_eq!(g.image.codec, Codec::Av1);
+    assert_eq!((g.image.width, g.image.height), (32, 24));
+    assert!(g.issues.is_empty(), "{:?}", g.issues);
+}

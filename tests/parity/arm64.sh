@@ -4,7 +4,8 @@
 #
 # <aarch64-oracle-command> is the whole command that starts the aarch64 binary (for example
 # "qemu-aarch64 -L /usr/aarch64-linux-gnu target/aarch64-unknown-linux-gnu/release/examples/oracle").
-# Every n-th input (default 4) goes through `oracle uhdr` (text, coded bytes and pixels), and
+# Every n-th input (default 4) goes through `oracle uhdr` (text, coded bytes and pixels), `oracle
+# planes` (the decoded HEIF and AVIF planes, and its limit, thread and cancel checks), and
 # `oracle avif` and `oracle xmp` for the text outputs; each output dir is compared with diff -r
 # and deleted at once, so the disk use stays at one file's output. Exits 1 on any difference.
 set -eu
@@ -24,7 +25,7 @@ for f in $(ls "$work/in"); do
   rm -rf "$work/one" /out/*
   mkdir "$work/one"
   ln -s "$(readlink "$work/in/$f")" "$work/one/$f"
-  for mode in uhdr avif; do
+  for mode in uhdr avif planes; do
     $x $mode "$work/one" /out/x-$mode
     $a $mode "$work/one" /out/a-$mode
     diff -r /out/x-$mode /out/a-$mode > /dev/null || { echo "DIFFERENT: $mode $f" >&2; bad=$((bad + 1)); }

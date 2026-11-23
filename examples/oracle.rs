@@ -10,6 +10,15 @@
 //! `oracle avif <in-dir> <out-dir>`: `<f>.txt` with the gain-map fractions, as
 //! tests/parity/avif_oracle.c prints them with libavif v1.4.2.
 //!
+//! `oracle planes <in-dir> <out-dir>`: for every HEIF and AVIF file, the decoded base image and gain
+//! map as raw planes: `<f>.base.yuv`, `<f>.gm.yuv` (Y, Cb, Cr, tight rows; 1 byte per sample at
+//! depth 8, else 2 bytes little-endian) and `<f>.base.info`, `<f>.gm.info` (size, chroma, depths and
+//! the raw transforms, see `planes_info`), `<f>.ids` (the item ids, which the libheif oracle
+//! decodes) and `<f>.txt`. It also checks, per image, that `decode` gives the same result for 1, 2
+//! and 3 threads, `Cancelled` with the flag set, `LimitExceeded(Alloc)` under half the result and
+//! `LimitExceeded(Pixels)` one pixel under the image, and exits 1 when one fails.
+//! tests/parity/heif_oracle.c (libheif, by item id) and avif_oracle.c (libavif) write the same files.
+//!
 //! `oracle xmp <in-dir> <out.jsonl>`: one JSON object per file with the `hdrgm` and
 //! `HDRGainMap` XMP values of the primary and the gain-map image, as strings.
 //! tests/parity/compare.py compares them with ExifTool 13.64.
@@ -27,7 +36,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::{env, fs, io, process};
 
-use gainmap::{Container, Fraction, GainMapImage, Limits, Metadata};
+use gainmap::{
+    Chroma, Container, Decoded, Error, Fraction, GainMapImage, Limit, Limits, Location, Metadata,
+    Picture, Plane, Planes, Samples,
+};
+use isobmff::{Axis, Transform};
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -36,12 +49,13 @@ fn main() {
         ["uhdr", dir, out] => uhdr_cmd(Path::new(dir), Path::new(out), true),
         ["uhdr", dir, out, "--no-raw"] => uhdr_cmd(Path::new(dir), Path::new(out), false),
         ["avif", dir, out] => avif_cmd(Path::new(dir), Path::new(out)),
+        ["planes", dir, out] => planes_cmd(Path::new(dir), Path::new(out)),
         ["xmp", dir, out] => xmp_cmd(Path::new(dir), Path::new(out)),
         ["gen", dir, out] => gen_cmd(Path::new(dir), Path::new(out)),
         _ => {
             eprintln!(
                 "usage: oracle uhdr <in-dir> <out-dir>\n       oracle avif <in-dir> <out-dir>\n       \
-                 oracle xmp <in-dir> <out.jsonl>\n       oracle gen <in-dir> <out-dir>"
+                 oracle planes <in-dir> <out-dir>\n       oracle xmp <in-dir> <out.jsonl>\n       oracle gen <in-dir> <out-dir>"
             );
             process::exit(2);
         }
@@ -173,11 +187,15 @@ fn uhdr_one(data: &[u8], limits: &Limits, cancel: &AtomicBool) -> Uhdr {
             return out;
         }
     };
-    let Some(gm_pixels) = &decoded.gain_map else {
+    // A JPEG decodes to pixels, never to planes.
+    let (Some(base_pixels), Some(gm_pixels)) = (
+        decoded.base.as_pixels(),
+        decoded.gain_map.as_ref().and_then(Picture::as_pixels),
+    ) else {
         out.text = status_only("no-gain-map-pixels");
         return out;
     };
-    out.files.push(("base.rgba", decoded.base.data.clone()));
+    out.files.push(("base.rgba", base_pixels.data.clone()));
     out.files.push(("gm.raw", gm_pixels.data.clone()));
     // The size and channel lines come before the metadata lines, and are written for a gain
     // map without metadata too, so run.sh compares them for the Apple files as well.
@@ -278,6 +296,206 @@ fn avif_cmd(dir: &Path, out: &Path) -> io::Result<()> {
             out.join(format!("{name}.txt")),
             avif_one(&data, &limits, &cancel),
         )?;
+    }
+    Ok(())
+}
+
+// ---- planes ----
+
+/// The coded samples of a plane as the C oracles write them: tight rows, 1 byte per sample at
+/// depth 8, else 2 bytes little-endian.
+fn plane_bytes(p: &Plane) -> Vec<u8> {
+    match &p.samples {
+        Samples::U8(v) => v.clone(),
+        Samples::U16(v) => v.iter().flat_map(|s| s.to_le_bytes()).collect(),
+    }
+}
+
+/// The `.info` text of decoded planes, the format of tests/parity/heif_oracle.c and
+/// avif_oracle.c: `W H chroma depthY depthC` (chroma 400, 420, 422 or 444; for a monochrome image
+/// depthC is depthY), then the transforms as `crop L T R B` (borders; `crop inexact` when the
+/// `clap` has no exact integer crop, which is all `libavif` and `isobmff` accept), `imir axis`
+/// and `irot degrees`, in that order of kind and in `ipma` order within a kind. The C tools do not
+/// give the transforms in `ipma` order across kinds, so the order across kinds is fixed.
+fn planes_info(p: &Planes) -> String {
+    let chroma = match p.chroma {
+        Chroma::Mono => 400,
+        Chroma::Yuv420 => 420,
+        Chroma::Yuv422 => 422,
+        Chroma::Yuv444 => 444,
+    };
+    let depth_y = p.planes.first().map_or(0, |l| l.bit_depth);
+    let depth_c = p.planes.get(1).map_or(depth_y, |c| c.bit_depth);
+    let mut t = format!("{} {} {chroma} {depth_y} {depth_c}\n", p.width, p.height);
+    for tr in &p.transforms {
+        if let Transform::Clap(c) = tr {
+            match c.crop(p.width, p.height) {
+                Some(r) => {
+                    let _ = writeln!(
+                        t,
+                        "crop {} {} {} {}",
+                        r.x,
+                        r.y,
+                        p.width - r.x - r.width,
+                        p.height - r.y - r.height
+                    );
+                }
+                None => t.push_str("crop inexact\n"),
+            }
+        }
+    }
+    for tr in &p.transforms {
+        if let Transform::Mirror(a) = tr {
+            let _ = writeln!(t, "imir {}", u8::from(*a == Axis::LeftRight));
+        }
+    }
+    for tr in &p.transforms {
+        if let Transform::Rotate(d) = tr {
+            let _ = writeln!(t, "irot {d}");
+        }
+    }
+    t
+}
+
+/// The bytes a [`Planes`] holds (samples and codec metadata).
+fn planes_held(p: &Planes) -> usize {
+    let samples: usize = p
+        .planes
+        .iter()
+        .map(|l| match &l.samples {
+            Samples::U8(v) => v.len(),
+            Samples::U16(v) => v.len() * 2,
+        })
+        .sum();
+    let meta: usize = p.metadata.iter().map(|m| m.payload.len()).sum();
+    samples + meta
+}
+
+/// What `decode` must do with the same input under other limits: the same result for any
+/// `max_threads`, `Cancelled` when the flag is set, `LimitExceeded(Alloc)` under half of what the
+/// result holds, `LimitExceeded(Pixels)` one pixel under the image. Returns what went wrong.
+fn planes_checks(data: &[u8], one: &GainMapImage, want: &Decoded, p: &Planes) -> Vec<String> {
+    let mut bad = Vec::new();
+    let base = Limits::default();
+    let mut expect = |what: &str, limits: Limits, cancel: bool, want: Result<Decoded, Error>| {
+        let flag = AtomicBool::new(cancel);
+        let got = gainmap::decode(data, one, &limits, &flag);
+        if got != want {
+            bad.push(format!("{what}: {:?}", got.map(|_| ())));
+        }
+    };
+    for threads in [1, 2, 3] {
+        let l = Limits {
+            max_threads: threads,
+            ..base
+        };
+        expect(&format!("threads {threads}"), l, false, Ok(want.clone()));
+    }
+    expect("cancel", base, true, Err(Error::Cancelled));
+    let l = Limits {
+        max_alloc: planes_held(p) / 2,
+        ..base
+    };
+    expect(
+        "half alloc",
+        l,
+        false,
+        Err(Error::LimitExceeded(Limit::Alloc)),
+    );
+    let l = Limits {
+        max_pixels: (u64::from(p.width) * u64::from(p.height)).saturating_sub(1),
+        ..base
+    };
+    expect("pixels", l, false, Err(Error::LimitExceeded(Limit::Pixels)));
+    bad
+}
+
+/// Writes `<f>.ids`, `<f>.txt` and, for the base and the gain map that decode to planes,
+/// `<f>.<which>.info` and `<f>.<which>.yuv` (`which` = `base`, `gm`; the planes Y, Cb, Cr, tight)
+/// or `<f>.<which>.err` with the error class. Each image decodes alone (as the base of a copy of
+/// the read result), so one failure does not hide the other. Returns the failed self-checks.
+fn planes_one(name: &str, data: &[u8], out: &Path) -> io::Result<Vec<String>> {
+    let limits = limits();
+    let cancel = AtomicBool::new(false);
+    let image = match gainmap::read(data, &limits, &cancel) {
+        Ok(i) if i.container != Container::Jpeg => i,
+        Ok(_) => {
+            fs::write(out.join(format!("{name}.txt")), status_only("not-heif"))?;
+            return Ok(Vec::new());
+        }
+        Err(e) => {
+            fs::write(out.join(format!("{name}.txt")), status_only(e.class()))?;
+            return Ok(Vec::new());
+        }
+    };
+    let mut ids = String::new();
+    let mut picks = vec![("base", image.base.clone())];
+    if let Some(gm) = &image.gain_map {
+        picks.push(("gm", gm.image.clone()));
+    }
+    for (which, coded) in &picks {
+        if let Location::Item(id) = coded.location {
+            let _ = writeln!(ids, "{which} {id}");
+        }
+    }
+    fs::write(out.join(format!("{name}.ids")), ids)?;
+    let mut bad = Vec::new();
+    let mut text = String::from("status ok\n");
+    let mut alone: Vec<Option<Picture>> = Vec::new();
+    for (which, coded) in picks {
+        let mut one = image.clone();
+        one.base = coded;
+        one.gain_map = None;
+        match gainmap::decode(data, &one, &limits, &cancel) {
+            Ok(d) => {
+                let Picture::Planes(p) = &d.base else {
+                    continue;
+                };
+                alone.push(Some(d.base.clone()));
+                fs::write(out.join(format!("{name}.{which}.info")), planes_info(p))?;
+                let yuv: Vec<u8> = p.planes.iter().flat_map(plane_bytes).collect();
+                fs::write(out.join(format!("{name}.{which}.yuv")), yuv)?;
+                bad.extend(
+                    planes_checks(data, &one, &d, p)
+                        .into_iter()
+                        .map(|b| format!("{which} {b}")),
+                );
+            }
+            Err(e) => {
+                alone.push(None);
+                let _ = writeln!(text, "{which} {}", e.class());
+                fs::write(
+                    out.join(format!("{name}.{which}.err")),
+                    status_only(e.class()),
+                )?;
+            }
+        }
+    }
+    // Both images decoded together give what each gives alone.
+    if let [Some(base), Some(gm)] = alone.as_slice()
+        && gainmap::decode(data, &image, &limits, &cancel)
+            .map(|d| (d.base, d.gain_map))
+            .as_ref()
+            != Ok(&(base.clone(), Some(gm.clone())))
+    {
+        bad.push(String::from("both together differ from each alone"));
+    }
+    fs::write(out.join(format!("{name}.txt")), text)?;
+    Ok(bad)
+}
+
+fn planes_cmd(dir: &Path, out: &Path) -> io::Result<()> {
+    fs::create_dir_all(out)?;
+    let mut failed = false;
+    for (name, path) in files(dir)? {
+        let data = fs::read(&path)?;
+        for b in planes_one(&name, &data, out)? {
+            eprintln!("oracle: planes {name}: {b}");
+            failed = true;
+        }
+    }
+    if failed {
+        return Err(io::Error::other("a self-check of `oracle planes` failed"));
     }
     Ok(())
 }

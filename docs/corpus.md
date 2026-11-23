@@ -6,14 +6,15 @@ is recorded here and in `tests/parity/corpus.tsv`. No file is kept in this repos
 SHA-256 where it is pinned) and prints the SHA-256 of each file, so a "-" in `corpus.tsv` can be
 pinned after the first run. No personal photos of ours are used.
 
-Sources, 47 files in all:
+Sources, 56 files in all:
 
 | Source | Files | Licence | Pinned to |
 |---|---|---|---|
-| libavif `tests/data` | 22 | BSD-2-Clause (same as libavif) | tag v1.4.2 |
+| libavif `tests/data` | 30 | BSD-2-Clause (same as libavif) | tag v1.4.2 |
 | Mishaal Rahman, Ultra HDR Samples, `Originals` | 10 | CC-BY-4.0 | commit de109721ca47 |
 | Wikimedia Commons, category HDR gain-mapped images | 14 | CC BY-SA 4.0 | the file name (Commons keeps old revisions) |
 | johncf/apple-hdr-heic | 1 | MIT | commit e64716c29abc, SHA-256 pinned |
+| libultrahdr `tests/data` | 1 | Apache-2.0 OR MIT | commit 66821e0a261a |
 
 Where a file came from a person's own photos (some libavif test files say "personal photo"), the
 licence is the one the owner of the repository gave it; the libavif `tests/data/README.md` says
@@ -36,6 +37,8 @@ libavif repository it is stored in, BSD-2-Clause (the repository has no other li
   the category lists, each under 10 MB. The camera of the nine is not recorded on the file pages;
   all are phone- or camera-sized JPEGs.
 - johncf: an iPhone HEIC with an auxiliary `hdrgainmap` image, which has no `tmap` item.
+- libultrahdr `gainmap_hevc_16x16.heic` (`uhdr_gainmap_hevc_16x16.heic`): the only licensed HEIC with a `tmap` item that was found. Brands `heic mif1 tmap miaf`, an `altr` group [`tmap`, base], base and gain map both HEVC Main Still Picture 8-bit 4:2:0 coded at 64x64 with an essential `clap` that crops to 16x16, a 3-channel gain map, base with an ICC profile. Synthetic uniform pixels. Not in any libultrahdr tag (after v2.0.2).
+- libavif Adobe-aux AVIFs (`colors_hdr_p3`, `colors_hdr_rec2020`, `colors_hdr_srgb`, `colors_text_hdr_p3`, `colors_text_hdr_rec2020`, `colors_text_hdr_srgb`, `colors_text_wcg_hdr_rec2020`, `seine_hdr_srgb`): no `tmap` item; the gain map is an `auxl` image of type `urn:com:photo:aux:hdrgainmap` with `hdrgm` XMP, 10-bit 4:4:4. libavif ignores that format (its README), so these have no libavif gain-map channel; they exist to check that `gainmap` does not drop the gain map (src/heif.rs). `seine_hdr_rec2020.avif` and `colors_wcg_hdr_rec2020.avif` have no aux gain map and are left out.
 
 ## Files
 
@@ -90,6 +93,8 @@ Name is the local file name (`corpus.tsv`). Sizes are bytes.
 | commons_shipwrights_cottage.jpg | 7120769 | CC-BY-SA-4.0 | Commons File:Shipwright's_Cottage_in_India_Basin,_San_Francisco,_California,_US.jpg |
 | commons_stony_hill.jpg | 2355455 | CC-BY-SA-4.0 | Commons File:Stony_Hill_seen_from_Bernal_Heights,_San_Francisco,_California,_US.jpg |
 | apple_hdr_sample.heic | 238982 | MIT | johncf/apple-hdr-heic tests/data/hdr-sample.heic (Git LFS) |
+| uhdr_gainmap_hevc_16x16.heic | 1523 (SHA-256 in corpus.tsv after the first CI fetch) | Apache-2.0 OR MIT (libultrahdr tests/data/GAINMAP_FIXTURE_README.md, "Fixture-specific license") | libultrahdr commit 66821e0 tests/data/gainmap_hevc_16x16.heic |
+| colors_hdr_p3.avif, colors_hdr_rec2020.avif, colors_hdr_srgb.avif, colors_text_hdr_p3.avif, colors_text_hdr_rec2020.avif, colors_text_hdr_srgb.avif, colors_text_wcg_hdr_rec2020.avif, seine_hdr_srgb.avif | 26532, 24065, 28030, 29054, 28573, 34458, 33242, 168028 (SHA-256 in corpus.tsv after the first CI fetch) | BSD-2-Clause (tests/data/README.md: "same as libavif") | libavif v1.4.2 tests/data/<name> |
 
 ## Attribution
 
@@ -101,6 +106,7 @@ Name is the local file name (`corpus.tsv`). Sizes are bytes.
   The file pages on commons.wikimedia.org hold the full credit and licence text.
 - libavif test data: Copyright the libavif authors, BSD-2-Clause.
 - johncf/apple-hdr-heic: MIT.
+- libultrahdr test fixture `gainmap_hevc_16x16.heic`: Apache-2.0 OR MIT (the libultrahdr authors); unchanged.
 
 ## Excluded
 
