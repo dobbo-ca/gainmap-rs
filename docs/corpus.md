@@ -93,8 +93,8 @@ Name is the local file name (`corpus.tsv`). Sizes are bytes.
 | commons_shipwrights_cottage.jpg | 7120769 | CC-BY-SA-4.0 | Commons File:Shipwright's_Cottage_in_India_Basin,_San_Francisco,_California,_US.jpg |
 | commons_stony_hill.jpg | 2355455 | CC-BY-SA-4.0 | Commons File:Stony_Hill_seen_from_Bernal_Heights,_San_Francisco,_California,_US.jpg |
 | apple_hdr_sample.heic | 238982 | MIT | johncf/apple-hdr-heic tests/data/hdr-sample.heic (Git LFS) |
-| uhdr_gainmap_hevc_16x16.heic | 1523 (SHA-256 in corpus.tsv after the first CI fetch) | Apache-2.0 OR MIT (libultrahdr tests/data/GAINMAP_FIXTURE_README.md, "Fixture-specific license") | libultrahdr commit 66821e0 tests/data/gainmap_hevc_16x16.heic |
-| colors_hdr_p3.avif, colors_hdr_rec2020.avif, colors_hdr_srgb.avif, colors_text_hdr_p3.avif, colors_text_hdr_rec2020.avif, colors_text_hdr_srgb.avif, colors_text_wcg_hdr_rec2020.avif, seine_hdr_srgb.avif | 26532, 24065, 28030, 29054, 28573, 34458, 33242, 168028 (SHA-256 in corpus.tsv after the first CI fetch) | BSD-2-Clause (tests/data/README.md: "same as libavif") | libavif v1.4.2 tests/data/<name> |
+| uhdr_gainmap_hevc_16x16.heic | 1523 (SHA-256 in corpus.tsv, equal to the one in the libultrahdr fixture README) | Apache-2.0 OR MIT (libultrahdr tests/data/GAINMAP_FIXTURE_README.md, "Fixture-specific license") | libultrahdr commit 66821e0 tests/data/gainmap_hevc_16x16.heic |
+| colors_hdr_p3.avif, colors_hdr_rec2020.avif, colors_hdr_srgb.avif, colors_text_hdr_p3.avif, colors_text_hdr_rec2020.avif, colors_text_hdr_srgb.avif, colors_text_wcg_hdr_rec2020.avif, seine_hdr_srgb.avif | 26532, 24065, 28030, 29054, 28573, 34458, 33242, 168028 (SHA-256 in corpus.tsv) | BSD-2-Clause (tests/data/README.md: "same as libavif") | libavif v1.4.2 tests/data/<name> |
 
 ## Attribution
 

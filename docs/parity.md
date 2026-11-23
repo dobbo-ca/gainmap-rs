@@ -272,8 +272,8 @@ with the reason, and only that image is left unchecked:
 - libavif ignores the gain map of the eight Adobe-aux AVIFs (`auxl` type
   `urn:com:photo:aux:hdrgainmap`), of `seine_sdr_gainmap_notmapbrand.avif`,
   `seine_hdr_gainmap_wrongaltr.avif`, `unsupported_gainmap_version.avif`,
-  `unsupported_gainmap_minimum_version.avif` and
-  `unsupported_gainmap_writer_version_with_extra_bytes.avif`. Their gain-map planes are decoded
+  `unsupported_gainmap_minimum_version.avif`, the gm channel only
+  (libavif reads `unsupported_gainmap_writer_version_with_extra_bytes.avif` fully, so it has no line). Their gain-map planes are decoded
   by gainmap only. Their base planes are compared.
 - libavif fails the parse of `seine_sdr_gainmap_gammazero.avif` and
   `supported_gainmap_writer_version_with_extra_bytes.avif`, so it decodes neither image.
@@ -284,6 +284,20 @@ inexact` for gainmap and libavif but rounded by libheif, so such a HEIC would di
 is exact); more than one `irot`, `imir` or `clap` on an item is an error in libheif even with
 transforms ignored, and gainmap returns them all. The gain-map planes of a HEIC `tmap` file are
 decoded from the item id gainmap reports, not found by libheif itself.
+
+### Result of the first green run (run 45290454359, 56 inputs)
+
+| channel | inputs | C tool decoded | equal | differ | known |
+|---|---:|---:|---:|---:|---:|
+| `heifpix-base-info` / `-yuv` | 2 | 2 | 2 | 0 | 0 |
+| `heifpix-gm-info` / `-yuv` | 2 | 2 | 2 | 0 | 0 |
+| `avifpix-base-info` / `-yuv` | 23 | 21 | 21 | 0 | 2 |
+| `avifpix-gm-info` / `-yuv` | 23 | 9 | 9 | 0 | 14 |
+
+So 2 HEIC files and 23 AVIFs were compared: 25 base images and 11 gain maps match libheif and
+libavif plane for plane (every sample, the size, chroma format, bit depths and transform list),
+with 0 mismatches. The known lines are listed above. The pre-existing channels stayed equal
+(`uhdr-txt` 49 equal and 7 known, `avif` 19 equal and 4 known, XMP: 412 values compared, 412 match).
 
 ### Never-drop gates
 
@@ -324,7 +338,7 @@ The gate (`/report/status` is 0) needs all of this:
 - no difference outside `known-differences.tsv`, in any channel, and no gain-map gate failure;
 - at least 15 `uhdr-txt` files (libultrahdr read them and the text is equal), 8 `avif` files
   (libavif read them and the text is equal) and 10 `exiftool-mpimage2` files are equal, so a
-  run that compared nothing, or where both sides refused every file, fails; and at least 2 `heifpix-base-yuv`, 2 `heifpix-gm-yuv`, 10 `avifpix-base-yuv` and 6 `avifpix-gm-yuv` files are equal;
+  run that compared nothing, or where both sides refused every file, fails; and at least 2 `heifpix-base-yuv`, 2 `heifpix-gm-yuv`, 10 `avifpix-base-yuv` and 6 `avifpix-gm-yuv` files are equal (the first run had 2, 2, 21 and 9);
 - no ExifTool failure (a non-zero exit of any ExifTool run);
 - the no-crash sweep has no panic, abort, hang or tool failure. Every mutation goes through
   `oracle uhdr --no-raw` and `oracle xmp`, one batch per input; on a failure the files are tried
@@ -334,7 +348,7 @@ The gate (`/report/status` is 0) needs all of this:
 `known-differences.tsv` (file, channel, reason, and for `avif` the expected Rust outcome) lists documented, expected deviations only.
 Channel `uhdr` covers every `uhdr-*` channel of the file (likewise `turbo`, `exiftool`). A line
 that is not used is counted in the summary. Each line needs its reason before it is listed. Today
-there are eleven for the metadata, pixel and XMP channels, and 17 for the pixel channels (the gm channels of 13 AVIFs, and both channels of two more, listed under `planes`):
+there are eleven for the metadata, pixel and XMP channels, and 16 for the pixel channels (the gm channels of 12 AVIFs, and both channels of two more, listed under `planes`):
 
 - The five JPEGs with `rdf:Seq` XMP (`paris_exif_xmp_gainmap_bigendian.jpg`,
   `paris_exif_xmp_gainmap_littleendian.jpg`, `paris_exif_xmp_icc_gainmap_bigendian.jpg`,
