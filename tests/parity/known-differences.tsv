@@ -1,0 +1,7 @@
+# file	channel	reason (tab-separated; run.sh and compare.py skip lines starting with #).
+# Documented, expected deviations only: a difference nobody understands is a bug, not a line here.
+# channel: uhdr (every uhdr-* channel: txt, base-jpg, gm-jpg, base-rgba, gm-raw), uhdr-txt (one of them), avif, xmp.
+# A file that libultrahdr cannot read is gated by the ExifTool channel (JPEG) or the libavif channel (AVIF).
+seine_sdr_gainmap_srgb.jpg	uhdr	Photoshop writes GainMapMin, GainMapMax and Gamma as rdf:Seq elements and has no ISO payload. libultrahdr v2.0.2 reads hdrgm attributes only (jpegrutils.cpp XMPXmlHandler), so it fails with "could not find attribute hdrgm:GainMapMax"; gainmap reads the Seq (docs/parity.md)
+apple_gainmap_old.jpg	uhdr-txt	Apple HDRGainMap XMP: libultrahdr reads HDRGainMapHeadroom as a log2 value (exp2) and builds metadata from it; gainmap does not (libavif and Apple treat it as linear): it keeps the gain map with metadata None (docs/parity.md)
+apple_gainmap_new.jpg	uhdr-txt	same as apple_gainmap_old.jpg

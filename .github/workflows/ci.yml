@@ -1,0 +1,156 @@
+name: ci
+on: { pull_request: {}, push: { branches: [main] }, workflow_dispatch: {} }
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  # The checks run inside .github/ci/Dockerfile on the in-cluster BuildKit, so the Rust image and the
+  # build cache stay in the cluster. jpeg-rs, exif-rs, isobmff-rs and deflate-rs (a dependency of exif-rs)
+  # are private: the dobbo-ca-ci-read GitHub App mints a
+  # read-only token for those repos, and it reaches the build only as a BuildKit secret. The layers are
+  # also saved to the Actions cache (one scope per job), so a restart of buildkitd does not throw
+  # them away.
+  # A PR needs only `test`; arm64, parity and parity-arm64 run on main and on workflow_dispatch.
+  test:
+    runs-on: github-arc-runner-set
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { lfs: false }
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.CI_READ_APP_ID }}
+          private-key: ${{ secrets.CI_READ_APP_KEY }}
+          owner: dobbo-ca
+          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs
+          permission-contents: read
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: remote
+          endpoint: tcp://buildkitd.github-arc.svc.cluster.local:1234
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .github/ci/Dockerfile
+          target: ci
+          push: false
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=gainmap-rs-test
+          # Only main and dispatch runs export: a PR's cache is scoped to its ref, so no other PR
+          # could read it, and the export takes about two minutes.
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max,scope=gainmap-rs-test' || '' }}
+          secrets: |
+            gh_token=${{ steps.app.outputs.token }}
+
+  # The whole suite on aarch64 under qemu-user.
+  arm64:
+    if: github.event_name != 'pull_request'
+    runs-on: github-arc-runner-set
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { lfs: false }
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.CI_READ_APP_ID }}
+          private-key: ${{ secrets.CI_READ_APP_KEY }}
+          owner: dobbo-ca
+          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs
+          permission-contents: read
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: remote
+          endpoint: tcp://buildkitd.github-arc.svc.cluster.local:1234
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .github/ci/Dockerfile
+          target: arm64
+          push: false
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=gainmap-rs-arm64
+          cache-to: type=gha,mode=max,scope=gainmap-rs-arm64
+          secrets: |
+            gh_token=${{ steps.app.outputs.token }}
+
+  # libultrahdr 2.0.2 + libjpeg-turbo 3.2.0, libavif 1.4.2 and ExifTool 13.64 (the oracles) and
+  # examples/oracle.rs read the same public corpus; tests/parity/run.sh
+  # compares them and runs the mutations. The report is the artifact parity-report; the job fails when
+  # its status is not 0.
+  parity:
+    if: github.event_name != 'pull_request'
+    runs-on: github-arc-runner-set
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { lfs: false }
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.CI_READ_APP_ID }}
+          private-key: ${{ secrets.CI_READ_APP_KEY }}
+          owner: dobbo-ca
+          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs
+          permission-contents: read
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: remote
+          endpoint: tcp://buildkitd.github-arc.svc.cluster.local:1234
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .github/ci/Dockerfile
+          target: parity-report
+          push: false
+          outputs: type=local,dest=parity-out
+          cache-from: type=gha,scope=gainmap-rs-parity
+          cache-to: type=gha,mode=max,scope=gainmap-rs-parity
+          secrets: |
+            gh_token=${{ steps.app.outputs.token }}
+      - if: always()
+        run: cat parity-out/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+      - if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: parity-report
+          path: parity-out
+      - run: |
+          s=$(cat parity-out/status)
+          [ "$s" = 0 ] || { echo "parity status $s"; exit 1; }
+
+  # The x86_64 and the aarch64 (qemu-user) builds of the oracle example give byte-identical output on
+  # every 4th corpus file.
+  parity-arm64:
+    if: github.event_name != 'pull_request'
+    runs-on: github-arc-runner-set
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { lfs: false }
+      - id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.CI_READ_APP_ID }}
+          private-key: ${{ secrets.CI_READ_APP_KEY }}
+          owner: dobbo-ca
+          repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs
+          permission-contents: read
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: remote
+          endpoint: tcp://buildkitd.github-arc.svc.cluster.local:1234
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .github/ci/Dockerfile
+          target: parity-arm64
+          push: false
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=gainmap-rs-parity-arm64
+          cache-to: type=gha,mode=max,scope=gainmap-rs-parity-arm64
+          secrets: |
+            gh_token=${{ steps.app.outputs.token }}

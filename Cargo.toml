@@ -1,0 +1,19 @@
+[package]
+name = "gainmap"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+description = "Ultra HDR / ISO 21496-1 gain maps: read the SDR base, the gain map and its metadata from JPEG, HEIF and AVIF. Pure Rust, bounded on hostile input."
+publish = false
+
+[dependencies]
+# Baseline and progressive JPEG decode of the SDR base and the gain-map image (docs/dependencies.md).
+jpeg = { git = "https://github.com/dobbo-ca/jpeg-rs", rev = "22a2c3196d9afbd9df1e0fda2b6ca3caf590d38c" }
+# XMP packet parse (hdrgm, GContainer, Apple HDRGainMap properties).
+exif = { git = "https://github.com/dobbo-ca/exif-rs", rev = "c2e986828db71b63e0b436e8e44f41d9ebe77620" }
+# HEIF / AVIF boxes: items, iref, entity groups, auxC, item data.
+isobmff = { git = "https://github.com/dobbo-ca/isobmff-rs", rev = "26953d6120830fee8173964f7222e95f5cc3a35c" }
+
+[profile.release]
+codegen-units = 1

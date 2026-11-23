@@ -1,0 +1,35 @@
+gainmap-rs
+Copyright (c) 2026 Chris Dobbyn. Apache-2.0 licensed (see LICENSE).
+
+This is a new crate, not a port of one repository. The code is new, with one exception: the ISO
+21496-1 payload reader in src/iso.rs is a port of part of libultrahdr (below). The file layouts
+come from the Ultra HDR format (Android, v1.1), CIPA DC-007 (Multi-Picture Format), the Adobe
+HDR gain map XMP namespace and ISO/IEC 21496-1.
+
+Third-party code
+----------------
+
+1. libultrahdr v2.0.2 (github.com/google/libultrahdr at e5f5a022fe96fc4dc2ee35c19f733a50df807abe),
+   lib/src/gainmapmetadata.cpp. Copyright 2024 The Android Open Source Project. Licensed under
+   the Apache License 2.0 or the MIT license, at your option.
+
+   Ported: `decodeGainmapMetadata` (the big-endian field order, the flag bits, the common
+   denominator form, copying channel 0 to the other channels) and
+   `gainmapMetadataFractionToFloat` (non-zero denominators, `f32` division). The Rust code is in
+   src/iso.rs (`IsoMetadata::parse`, `Metadata::from_iso`). The port is used here under the
+   Apache License 2.0, which is the licence of this crate.
+
+Tools used only in CI (no code copied, nothing linked into the crate)
+---------------------------------------------------------------------
+
+- libultrahdr v2.0.2 (Apache-2.0 or MIT), libjpeg-turbo 3.2.0 (BSD-3-Clause and IJG) and libavif
+  v1.4.2 (BSD-2-Clause) are the parity oracles for the metadata and the pixels. They run as C or
+  C++ tools built in CI.
+- ExifTool 13.64 (GPL or Artistic licence) is the oracle for the XMP values. It is read as a
+  behaviour reference only; no ExifTool code or tables are copied.
+
+Dependencies
+------------
+
+github.com/dobbo-ca/jpeg-rs (JPEG decode), github.com/dobbo-ca/exif-rs (XMP parse) and
+github.com/dobbo-ca/isobmff-rs (HEIF and AVIF boxes), all owner crates. See docs/dependencies.md.
