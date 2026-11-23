@@ -82,9 +82,9 @@ when the primary or the gain-map XMP has `hdrgm`, else `Iso` when there is an IS
 When a gain-map image is found but its metadata is missing or invalid, `read` still returns
 `Some(GainMap)` with `metadata: None` and the reasons in `issues`. A bad XMP packet is the issue
 `xmp-malformed`, not an error. The issue tokens are stable: `iso-minimum-version`,
-`iso-truncated`, `iso-zero-denominator`, `xmp-missing-gainmapmax`, `xmp-missing-hdrcapacitymax`,
+`iso-truncated`, `iso-zero-denominator`, `iso-gamma-zero`, `xmp-missing-gainmapmax`, `xmp-missing-hdrcapacitymax`,
 `xmp-bad-count`, `xmp-bad-number`, `xmp-malformed`, `mpf-malformed`, `tmap-version`,
-`tmap-unreadable`, `xmp-unreadable`, `gainmap-image-unreadable`, `metadata-missing`. Only a limit,
+`tmap-not-preferred`, `tmap-too-large`, `tmap-unreadable`, `xmp-unreadable`, `gainmap-image-unreadable`, `metadata-missing`. Only a limit,
 an allocation failure or the cancel flag ends `read` early.
 
 ## Decode

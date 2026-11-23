@@ -232,10 +232,14 @@ impl Metadata {
     /// # Errors
     ///
     /// [`Error::Unsupported`]`("iso minimum_version")` when `minimum_version` is not 0;
-    /// [`Error::Malformed`]`("iso-zero-denominator")` when any denominator is 0.
+    /// [`Error::Malformed`]`("iso-zero-denominator")` when any denominator is 0;
+    /// [`Error::Malformed`]`("iso-gamma-zero")` when a gamma is 0 (the decode would divide by it).
     pub fn from_iso(iso: &IsoMetadata) -> Result<Metadata, Error> {
         if iso.minimum_version != 0 {
             return Err(Error::Unsupported("iso minimum_version"));
+        }
+        if iso.channels.iter().any(|ch| ch.gamma.numerator == 0) {
+            return Err(Error::Malformed("iso-gamma-zero"));
         }
         let mut m = Metadata {
             gain_map_min: [0.0; 3],
