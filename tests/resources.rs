@@ -214,16 +214,7 @@ fn read_charges_the_xmp_packet() {
 // A HEIC file whose gain map XMP item is several MiB: 2000 properties of 1.5 KB each. It is one
 // extent, so `read` borrows it from the input and then copies it once for the XMP parse.
 fn heic_big_xmp() -> Vec<u8> {
-    let mut props = String::from(
-        "<HDRGainMap:HDRGainMapVersion>65536</HDRGainMap:HDRGainMapVersion>\
-         <HDRGainMap:HDRGainMapHeadroom>4.5</HDRGainMap:HDRGainMapHeadroom>",
-    );
-    let value = "v".repeat(1500);
-    for i in 0..2000 {
-        props.push_str(&format!("<HDRGainMap:P{i}>{value}</HDRGainMap:P{i}>"));
-    }
-    let xml = xmp_doc(APPLE_DECL, "", &props);
-    assert!(xml.len() > 2 << 20 && xml.len() < 4 << 20, "{}", xml.len());
+    let xml = big_xmp_xml();
     let mut s = Heif::new(b"heic");
     let size = s.prop(ispe(64, 48));
     let small = s.prop(ispe(32, 24));
@@ -235,6 +226,49 @@ fn heic_big_xmp() -> Vec<u8> {
     s.link(b"auxl", 2, &[1]);
     s.link(b"cdsc", 3, &[2]);
     s.build()
+}
+
+// The same file with the XMP item cut into 8 extents, which `read` has to copy into one buffer,
+// and 40 `iovl` overlay items of 8000 inputs each, which stay in the parsed graph for the whole
+// call (about 4 MiB of overlay inputs, plus their `dimg` lists).
+fn heic_big_graph() -> Vec<u8> {
+    let xml = big_xmp_xml();
+    let mut s = Heif::new(b"heic");
+    let size = s.prop(ispe(64, 48));
+    let small = s.prop(ispe(32, 24));
+    let cfg = s.prop(hvcc());
+    let aux = s.prop(auxc(APPLE_AUX));
+    s.item(1, b"hvc1", &[1; 4], &[size, cfg]);
+    s.item(2, b"hvc1", &[2; 4], &[small, cfg, aux]);
+    s.xmp_item(3, &xml);
+    s.split(3, 8);
+    s.link(b"auxl", 2, &[1]);
+    s.link(b"cdsc", 3, &[2]);
+    const INPUTS: usize = 8000;
+    // Version 0, flags 0, four fill words, a 64 x 48 canvas, then an (x, y) pair per input.
+    let mut iovl = vec![0u8; 2 + 8];
+    iovl.extend_from_slice(&64u16.to_be_bytes());
+    iovl.extend_from_slice(&48u16.to_be_bytes());
+    iovl.extend(vec![0u8; 4 * INPUTS]);
+    for id in 10..50 {
+        s.item(id, b"iovl", &iovl, &[size]);
+        s.link(b"dimg", id, &[1; INPUTS]);
+    }
+    s.build()
+}
+
+fn big_xmp_xml() -> String {
+    let mut props = String::from(
+        "<HDRGainMap:HDRGainMapVersion>65536</HDRGainMap:HDRGainMapVersion>\
+         <HDRGainMap:HDRGainMapHeadroom>4.5</HDRGainMap:HDRGainMapHeadroom>",
+    );
+    let value = "v".repeat(1500);
+    for i in 0..2000 {
+        props.push_str(&format!("<HDRGainMap:P{i}>{value}</HDRGainMap:P{i}>"));
+    }
+    let xml = xmp_doc(APPLE_DECL, "", &props);
+    assert!(xml.len() > 2 << 20 && xml.len() < 4 << 20, "{}", xml.len());
+    xml
 }
 
 // A 3 MiB XMP item: the smallest cap that lets `read` succeed is above the packet size, one cap
@@ -277,6 +311,46 @@ fn read_peak_with_a_big_xmp_item() {
         peak >= 3 << 20,
         "peak {peak} is below the size of the packet"
     );
+}
+
+// A large parsed graph (40 overlays of 8000 inputs) and a multi-extent XMP item that `read`
+// copies: at every cap the measured peak stays within max_alloc plus the slack, and a cap below
+// what the call needs gives an allocation error. The graph and the copy are held together, so
+// the peak at a generous cap is well above the packet alone.
+#[test]
+fn read_peak_with_a_big_graph_and_split_xmp() {
+    let _g = lock();
+    let data = heic_big_graph();
+    let run = |cap: usize| {
+        let lim = limits_of(cap, 1);
+        measured(|| gainmap::read(&data, &lim, &no_cancel()).map(|_| ()))
+    };
+    let (below, need) = min_alloc(|cap| run(cap).0.is_ok());
+    assert!(need >= 3 << 20, "the packet is not charged: {need}");
+    for cap in [
+        below,
+        need,
+        need / 2,
+        1 << 20,
+        2 * need,
+        Limits::default().max_alloc,
+    ] {
+        let (r, peak) = run(cap);
+        let at = format!("big graph max_alloc {cap}");
+        match r {
+            Ok(()) => assert!(cap >= need, "{at}: succeeded below {need}"),
+            Err(e) => {
+                assert!(is_alloc_error(&e), "{at}: {e}");
+                assert!(cap < need, "{at}: failed at or above {need}");
+            }
+        }
+        within(&at, peak, cap, READ_SLACK);
+    }
+    // The overlay inputs (40 x 8000 x 12 bytes) and the copied packet (over 2 MiB) are both live
+    // at the peak, so a call that charged or held only one of them would sit below this.
+    let (r, peak) = run(Limits::default().max_alloc);
+    assert_eq!(r, Ok(()));
+    assert!(peak >= 5 << 20, "peak {peak} is below graph plus packet");
 }
 
 // Decode of two big images: the base (9 MiB of RGBA) stays alive while the gain map decodes. At
@@ -333,9 +407,10 @@ fn decode_peak_within_max_alloc() {
     }
 }
 
-/// The number of threads that allocated during `f`, as the smallest of five runs. A thread of
-/// the test harness that happens to allocate in one run, or a pool thread that starts in the
-/// first one, adds to a count but is not there every time; threads that do the work are.
+/// The number of threads that allocated during `f`, as the largest of five runs: a run that
+/// breaks the limit must fail the test even if another run happens to see fewer threads. Every
+/// test of this file holds `lock()`, so the other test threads are idle, and a first call before
+/// the runs starts the pool threads.
 fn threads_used(f: impl Fn()) -> u32 {
     f();
     (0..5)
@@ -346,7 +421,7 @@ fn threads_used(f: impl Fn()) -> u32 {
             TRACK.store(false, Ordering::SeqCst);
             SEEN.load(Ordering::SeqCst).count_ones()
         })
-        .min()
+        .max()
         .unwrap_or(0)
 }
 
