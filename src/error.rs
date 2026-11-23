@@ -173,7 +173,7 @@ impl From<av1::Error> for Error {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "heif", feature = "avif")))]
 mod tests {
     use super::*;
 
