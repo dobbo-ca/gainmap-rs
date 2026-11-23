@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "av1"
+version = "0.1.0"
+source = "git+https://github.com/dobbo-ca/av1-rs?rev=783e8ad65235f4e8be3c19e5de3e0faddb9cdafc#783e8ad65235f4e8be3c19e5de3e0faddb9cdafc"
+dependencies = [
+ "isobmff",
+]
+
+[[package]]
 name = "crossbeam-deque"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -50,9 +58,19 @@ dependencies = [
 name = "gainmap"
 version = "0.1.0"
 dependencies = [
+ "av1",
  "exif",
+ "hevc",
  "isobmff",
  "jpeg",
+]
+
+[[package]]
+name = "hevc"
+version = "0.1.0"
+source = "git+https://github.com/dobbo-ca/hevc-rs?rev=fee58e6df500cee3585d810541f8447667712e23#fee58e6df500cee3585d810541f8447667712e23"
+dependencies = [
+ "isobmff",
 ]
 
 [[package]]

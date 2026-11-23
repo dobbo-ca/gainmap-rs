@@ -4,7 +4,8 @@
 # <corpus> is what tests/parity/fetch.sh made; <oracle-binary> is the built examples/oracle.rs.
 # The C tools come from the Dockerfile stage oracle-tools: UHDR_ORACLE (default
 # /opt/oracle/bin/uhdr_oracle, libultrahdr + libjpeg-turbo), AVIF_ORACLE (default
-# /opt/oracle/bin/avif_oracle, libavif), EXIFTOOL (default /opt/exiftool/exiftool).
+# /opt/oracle/bin/avif_oracle, libavif + dav1d), HEIF_ORACLE (default /opt/oracle/bin/heif_oracle,
+# libheif + libde265), EXIFTOOL (default /opt/exiftool/exiftool).
 #
 # Per input file, to bound the disk use: the C++ oracle and the Rust oracle write into temp dirs,
 # the .txt files are compared with diff (uhdr: the first line is only "ok or not", the error
@@ -22,6 +23,7 @@ report=${3:?usage: run.sh <corpus> <oracle-binary> <report-dir>}
 here=$(cd "$(dirname "$0")" && pwd)
 uhdr=${UHDR_ORACLE:-/opt/oracle/bin/uhdr_oracle}
 avif=${AVIF_ORACLE:-/opt/oracle/bin/avif_oracle}
+heif=${HEIF_ORACLE:-/opt/oracle/bin/heif_oracle}
 exiftool=${EXIFTOOL:-/opt/exiftool/exiftool}
 
 missing() { echo "run.sh: missing $1" >&2; exit 2; }
@@ -30,6 +32,7 @@ for c in perl python3 timeout awk cmp diff; do command -v "$c" >/dev/null 2>&1 |
 [ -x "$oracle" ] || missing "$oracle"
 [ -x "$uhdr" ] || missing "$uhdr"
 [ -x "$avif" ] || missing "$avif"
+[ -x "$heif" ] || missing "$heif"
 
 work=/work
 rm -rf "$work"
@@ -46,7 +49,7 @@ case $n in ''|*[!0-9]*) n=0 ;; esac
 echo "inputs: $n"
 # An empty or partial corpus must not pass: corpus.tsv lists PARITY_MIN_INPUTS files (divided
 # by every-n).
-min=$((${PARITY_MIN_INPUTS:-47} / every))
+min=$((${PARITY_MIN_INPUTS:-56} / every))
 if [ "$n" -lt "$min" ]; then echo "run.sh: $n inputs, want at least $min" >&2; status=1; fi
 
 fail() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$report/failures.tsv"; status=1; }
@@ -111,8 +114,8 @@ compare_one() {
 
 sweep_total=0
 for f in $(ls "$work/in"); do
-  one="$work/one"; oc="$work/oc"; or="$work/or"
-  rm -rf "$one" "$oc" "$or"; mkdir -p "$one"
+  one="$work/one"; oc="$work/oc"; or="$work/or"; op="$work/op"
+  rm -rf "$one" "$oc" "$or" "$op"; mkdir -p "$one"
   ln -s "$(readlink "$work/in/$f")" "$one/$f"
 
   # ---- libultrahdr + libjpeg-turbo against gainmap (every file: both must refuse a non-JPEG)
@@ -179,16 +182,30 @@ for f in $(ls "$work/in"); do
   # ---- libavif against gainmap (AVIF and HEIC inputs)
   case $f in
     *.avif|*.avifs|*.heic|*.heif)
-      rm -rf "$oc" "$or"
+      rm -rf "$oc" "$or" "$op"
       timeout 900 "$oracle" avif "$one" "$or" || fail "$f" avif-rust "exit $?"
-      # libavif refuses a HEIC (no 'avif' brand), so a HEIC has no libavif channel. It is
+      # The decoded planes. `oracle planes` also runs its own limit, thread and cancel checks on
+      # every image it decodes: a failed check is a non-zero exit.
+      timeout 900 "$oracle" planes "$one" "$op" || fail "$f" planes-rust "exit $?"
+      # libavif refuses a HEIC (no 'avif' brand), so a HEIC has no libavif metadata channel. It is
       # gated by compare.py instead: Rust must report a gain map, and its XMP values and
-      # sizes are compared with ExifTool.
+      # sizes are compared with ExifTool. Its planes are compared with libheif, which decodes
+      # the item ids that gainmap reports (`oracle planes` writes them to <f>.ids).
       case $f in
-        *.heic|*.heif) ;;
+        *.heic|*.heif)
+          timeout 900 "$heif" "$one" "$oc" "$op" || fail "$f" heif-c "exit $?"
+          for w in base gm; do
+            compare_one "$f" "heifpix-$w-info" "$w.info" raw "$oc" "$op"
+            compare_one "$f" "heifpix-$w-yuv" "$w.yuv" raw "$oc" "$op"
+          done
+          ;;
         *)
           timeout 900 "$avif" "$one" "$oc" || fail "$f" avif-c "exit $?"
           compare_one "$f" avif txt avif "$oc" "$or"
+          for w in base gm; do
+            compare_one "$f" "avifpix-$w-info" "$w.info" raw "$oc" "$op"
+            compare_one "$f" "avifpix-$w-yuv" "$w.yuv" raw "$oc" "$op"
+          done
           ;;
       esac
       ;;
@@ -222,7 +239,7 @@ for f in $(ls "$work/in"); do
       rm -rf "$work/gen" "$work/gen-out" "$work/g1" "$work/g1o"
       ;;
   esac
-  rm -rf "$one" "$oc" "$or"
+  rm -rf "$one" "$oc" "$or" "$op"
 done
 
 # ---- ExifTool 13.64 against `oracle xmp`: the primary images (the inputs) and the gain-map JPEGs
@@ -253,14 +270,16 @@ BEGIN {
   if ($4 == 1) okc[ch]++
   if (res == "equal") { eq[ch]++; next }
   base = ch; sub(/-.*/, "", base)
+  part = ch; sub(/-[^-]*$/, "", part)
   if ((f SUBSEP ch) in k && (ch != "avif" || want[f SUBSEP ch] == $5)) { kn[ch]++; used[f SUBSEP ch] = 1 }
+  else if ((f SUBSEP part) in k) { kn[ch]++; used[f SUBSEP part] = 1 }
   else if ((f SUBSEP base) in k) { kn[ch]++; used[f SUBSEP base] = 1 }
   else { df[ch]++; nd++; print f "\t" ch "\t" res > diffs }
 }
 END {
   print "| channel | inputs | ok | equal | differ | known | n/a |"
   print "|---|---:|---:|---:|---:|---:|---:|"
-  n = split("uhdr-txt uhdr-dims uhdr-base-jpg uhdr-gm-jpg uhdr-base-rgba uhdr-gm-raw avif turbo-base-rgba turbo-gm-raw base-prefix base-size exiftool-mpimage2", chs, " ")
+  n = split("uhdr-txt uhdr-dims uhdr-base-jpg uhdr-gm-jpg uhdr-base-rgba uhdr-gm-raw avif turbo-base-rgba turbo-gm-raw base-prefix base-size exiftool-mpimage2 heifpix-base-info heifpix-base-yuv heifpix-gm-info heifpix-gm-yuv avifpix-base-info avifpix-base-yuv avifpix-gm-info avifpix-gm-yuv", chs, " ")
   for (i = 1; i <= n; i++) { c = chs[i]; printf "| %s | %d | %d | %d | %d | %d | %d |\n", c, inputs[c], okc[c], eq[c], df[c], kn[c], na[c] }
   unused = 0
   for (key in k) if (!(key in used)) { split(key, kk, SUBSEP); if (kk[2] != "xmp") unused++ }
@@ -281,6 +300,14 @@ avif_eq=$(awk -F'\t' '$2 == "avif" && $3 == "equal" && $4 == 1' "$work/results.t
 if [ "$avif_eq" -lt $((${PARITY_MIN_AVIF_OK:-8} / every)) ]; then
   echo "run.sh: only $avif_eq equal avif files" >&2; status=1
 fi
+# The same for the decoded planes: only files both tools decoded and the Rust planes equal count.
+for spec in heifpix-base-yuv:PARITY_MIN_HEIFPIX_BASE:2 heifpix-gm-yuv:PARITY_MIN_HEIFPIX_GM:2 \
+            avifpix-base-yuv:PARITY_MIN_AVIFPIX_BASE:10 avifpix-gm-yuv:PARITY_MIN_AVIFPIX_GM:6; do
+  ch=${spec%%:*}; rest=${spec#*:}; var=${rest%%:*}; dflt=${rest#*:}
+  eq=$(awk -F'\t' -v ch="$ch" '$2 == ch && $3 == "equal" && $4 == 1' "$work/results.tsv" | wc -l | tr -d ' ')
+  eval "want=\${$var:-$dflt}"
+  if [ "$eq" -lt $((want / every)) ]; then echo "run.sh: only $eq equal $ch files" >&2; status=1; fi
+done
 mp_eq=$(awk -F'\t' '$2 == "exiftool-mpimage2" && $3 == "equal"' "$work/results.tsv" | wc -l | tr -d ' ')
 if [ "$mp_eq" -lt $((${PARITY_MIN_MPIMAGE2_OK:-10} / every)) ]; then
   echo "run.sh: only $mp_eq equal exiftool-mpimage2 files" >&2; status=1

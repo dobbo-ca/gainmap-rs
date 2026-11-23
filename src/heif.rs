@@ -137,7 +137,7 @@ fn image_cost(h: &Heif) -> usize {
 /// to the `tmap` items that link `id` times the `altr` groups that hold it, with no cancel check.
 /// So before the call, count both in one linear pass each (with the cancel flag checked every
 /// 1024 steps) and fail with `Images` when either is over `max_images`.
-fn checked_image(
+pub(crate) fn checked_image(
     heif: &Heif,
     id: u32,
     limits: &Limits,
@@ -187,7 +187,17 @@ fn coded_of(config: &CodecConfig) -> (Codec, u8) {
     }
 }
 
-/// The coded image of an image item; a grid reports the codec of its first tile.
+/// The longest chain of `iden` items that [`coded`] follows.
+const IDEN_DEPTH: usize = 8;
+
+/// The Adobe auxiliary image type of a gain map (`auxC`), which `isobmff` does not look for.
+const ADOBE_GAIN_MAP: &str = "urn:com:photo:aux:hdrgainmap";
+
+/// The MIME type of an XMP item.
+const XMP_TYPE: &str = "application/rdf+xml";
+
+/// The coded image of an image item; a grid reports the codec of its first tile, an `iden` image
+/// the codec of its input.
 fn coded(
     heif: &Heif,
     img: &isobmff::Image,
@@ -210,6 +220,26 @@ fn coded(
                 (codec, components, g.width, g.height)
             } else {
                 (codec, components, img.width, img.height)
+            }
+        }
+        ImageKind::Identity { input } => {
+            // An `iden` image is its input: the codec, the components and (without an `ispe`)
+            // the size come from there. A chain of `iden` items is followed to a bound.
+            let mut cur = checked_image(heif, *input, limits, budget)?;
+            for _ in 0..IDEN_DEPTH {
+                let ImageKind::Identity { input } = cur.kind else {
+                    break;
+                };
+                cur = checked_image(heif, input, limits, budget)?;
+            }
+            if matches!(cur.kind, ImageKind::Identity { .. }) {
+                return Err(Error::Unsupported("heif-identity-depth"));
+            }
+            let inner = coded(heif, &cur, limits, budget)?;
+            if img.width == 0 && img.height == 0 {
+                (inner.codec, inner.components, inner.width, inner.height)
+            } else {
+                (inner.codec, inner.components, img.width, img.height)
             }
         }
         _ => return Err(Error::Unsupported("heif-image-kind")),
@@ -261,7 +291,13 @@ pub(crate) fn read(
             Some(gm) => Some(read_gain_map(
                 data, &heif, gm, &img.xmp, base.codec, limits, budget,
             )?),
-            None => None,
+            // Adobe's `auxl` gain map, which `isobmff` does not know (never-drop rule).
+            None => match adobe_gain_map(&heif, &img, budget)? {
+                Some(gm) => Some(read_gain_map(
+                    data, &heif, &gm, &img.xmp, base.codec, limits, budget,
+                )?),
+                None => None,
+            },
         },
     };
     budget.release(images);
@@ -278,6 +314,42 @@ pub(crate) fn read(
         gain_map,
         heif: Some(heif),
     })
+}
+
+/// The gain map of `img` that Adobe writes: an `auxl` image whose `auxC` type is
+/// `urn:com:photo:aux:hdrgainmap`. It is read like Apple's (`GainMapSource::Apple`); its XMP is
+/// the first XMP item that describes it (`cdsc`).
+fn adobe_gain_map(
+    heif: &Heif,
+    img: &isobmff::Image,
+    budget: &Budget<'_>,
+) -> Result<Option<isobmff::GainMap>, Error> {
+    let Some(aux) = img.aux.iter().find(|a| &*a.aux_type == ADOBE_GAIN_MAP) else {
+        return Ok(None);
+    };
+    let mut xmp = Vec::new();
+    for (i, r) in heif.references.iter().enumerate() {
+        if i.is_multiple_of(1024) {
+            budget.check_cancel()?;
+        }
+        if r.kind.0 == *b"cdsc"
+            && r.to.contains(&aux.id)
+            && heif
+                .item(r.from)
+                .is_some_and(|it| it.item_type.0 == *b"mime" && it.content_type == XMP_TYPE)
+        {
+            xmp.try_reserve_exact(1).map_err(|_| Error::OutOfMemory)?;
+            xmp.push(r.from);
+            break;
+        }
+    }
+    Ok(Some(isobmff::GainMap {
+        image: aux.id,
+        tmap: None,
+        metadata: None,
+        source: GainMapSource::Apple,
+        xmp,
+    }))
 }
 
 /// The `tmap` item that links `base_id` to a gain map (`dimg` inputs [base, gain map]). Gives the
@@ -421,6 +493,20 @@ fn xmp_item(
     }
 }
 
+/// Item `id` has an `auxC` property of type `aux_type`.
+fn has_aux_type(heif: &Heif, id: u32, aux_type: &str) -> bool {
+    heif.item(id).is_some_and(|it| {
+        it.associations.iter().any(|a| {
+            usize::from(a.index)
+                .checked_sub(1)
+                .and_then(|i| heif.properties.get(i))
+                .is_some_and(|p| {
+                    matches!(&p.value, isobmff::PropValue::AuxC { aux_type: t, .. } if &**t == aux_type)
+                })
+        })
+    })
+}
+
 fn read_gain_map(
     data: &[u8],
     heif: &Heif,
@@ -506,6 +592,10 @@ fn read_gain_map(
     let metadata = resolve_metadata(iso.as_ref(), hdrgm.as_ref(), limits, &mut issues);
     let kind = match gm.source {
         GainMapSource::Tmap => Kind::Iso,
+        // Adobe's aux gain map with `hdrgm` XMP is an Ultra HDR gain map; else Apple's rules.
+        GainMapSource::Apple if hdrgm.is_some() && has_aux_type(heif, gm.image, ADOBE_GAIN_MAP) => {
+            Kind::UltraHdr
+        }
         GainMapSource::Apple => Kind::Apple,
     };
     Ok(GainMap {

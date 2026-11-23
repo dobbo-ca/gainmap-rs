@@ -4,11 +4,11 @@ This crate has no threads of its own. It never calls `std::thread::spawn`, `thre
 thread builder, and it has no pool. `read` runs on the calling thread. A test greps `src/` for the
 three calls (tests/resources.rs).
 
-`decode` passes `Limits::max_threads` to `jpeg::decode`, which may use up to that many threads
-(restart bands, colour stripes), the calling thread included, from its own pool. `max_threads = 1`
+`decode` passes `Limits::max_threads` to `jpeg::decode` and `av1::decode_avif_item` (hevc-rs decodes on the calling thread), which may use up to that many threads
+(JPEG restart bands and colour stripes, AV1 grid tiles), the calling thread included, from their own pools. `max_threads = 1`
 runs on the calling thread and never touches a pool. The two images are decoded one after the
 other, so at most one decode runs at a time: the thread count of a call is the thread count of
-`jpeg`, never the sum. The output is the same for every `max_threads` (tests/decode.rs,
+`jpeg` or `av1`, never the sum. The output is the same for every `max_threads` (tests/decode.rs,
 tests/resources.rs).
 
 Why not decode the base and the gain map in parallel: the base is much larger than the gain map,

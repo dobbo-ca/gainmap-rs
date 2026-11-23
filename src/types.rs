@@ -57,11 +57,14 @@ pub struct CodedImage {
 /// How the gain map was found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
-    /// A JPEG with `hdrgm` XMP (Ultra HDR; the file may also carry ISO 21496-1).
+    /// A JPEG with `hdrgm` XMP (Ultra HDR; the file may also carry ISO 21496-1), or a HEIF or AVIF
+    /// file whose gain map is an Adobe `auxl` image (`urn:com:photo:aux:hdrgainmap`) with `hdrgm`
+    /// XMP.
     UltraHdr,
     /// ISO 21496-1 only: a JPEG APP2 segment or a HEIF `tmap` item.
     Iso,
-    /// An Apple `HDRGainMap` auxiliary image or XMP.
+    /// An Apple `HDRGainMap` auxiliary image or XMP (also an Adobe auxiliary image that has no
+    /// `hdrgm` XMP).
     Apple,
 }
 
@@ -115,7 +118,7 @@ impl GainMapImage {
         }
     }
 
-    /// The full HEIF graph (HEIF and AVIF only), for a later HEVC or AV1 decode layer.
+    /// The full HEIF graph (HEIF and AVIF only): items, transforms, colours, auxiliary images.
     pub fn heif(&self) -> Option<&isobmff::Heif> {
         self.heif.as_ref()
     }
@@ -216,13 +219,142 @@ pub struct Pixels {
     pub data: Vec<u8>,
 }
 
+/// The chroma format of decoded [`Planes`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Chroma {
+    /// 4:0:0, one plane (Y).
+    Mono,
+    /// 4:2:0, three planes (Y, Cb, Cr), chroma at half width and half height.
+    Yuv420,
+    /// 4:2:2, three planes, chroma at half width.
+    Yuv422,
+    /// 4:4:4, three planes.
+    Yuv444,
+}
+
+/// The samples of one [`Plane`], rows without padding (stride is the plane width).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Samples {
+    /// Samples of a plane with a bit depth of 8.
+    U8(Vec<u8>),
+    /// Samples of a plane with a bit depth above 8, in the low bits.
+    U16(Vec<u16>),
+}
+
+/// One plane of decoded [`Planes`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Plane {
+    /// Width in samples.
+    pub width: u32,
+    /// Height in samples.
+    pub height: u32,
+    /// The bit depth of this plane (HEVC can code luma and chroma at different depths).
+    pub bit_depth: u8,
+    /// `width * height` samples.
+    pub samples: Samples,
+}
+
+/// The colour description (CICP, ITU-T H.273 codes) that the bitstream carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cicp {
+    /// `colour_primaries`.
+    pub primaries: u8,
+    /// `transfer_characteristics`.
+    pub transfer: u8,
+    /// `matrix_coefficients`.
+    pub matrix: u8,
+    /// Full range (`video_full_range_flag`, `color_range`) rather than studio range.
+    pub full_range: bool,
+}
+
+/// One metadata message of the bitstream, raw: an HEVC SEI message or an AV1 metadata OBU.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodecMetadata {
+    /// HEVC: the SEI `payloadType` (prefix or suffix NAL unit is not recorded). AV1: the
+    /// `metadata_type`.
+    pub kind: u64,
+    /// The payload bytes as stored (HEVC without emulation prevention bytes).
+    pub payload: Vec<u8>,
+}
+
+/// An image decoded by HEVC or AV1: the coded planes at their bit depth and chroma format, with
+/// no colour conversion and no transform applied.
+///
+/// The transforms are not applied because their result is not one thing. `libheif` applies each
+/// `irot`, `imir` and `clap` as it meets it and converts odd geometry to 4:4:4 first, and its
+/// `clap` rounding differs from `libavif` and `isobmff`, which round nothing. [`Planes::transforms`]
+/// lists them in `ipma` order for the caller, who also decides what an inexact `clap` means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Planes {
+    /// Luma width (a grid is assembled and cropped to its output size).
+    pub width: u32,
+    /// Luma height.
+    pub height: u32,
+    /// The chroma format.
+    pub chroma: Chroma,
+    /// The planes: Y, then Cb and Cr unless [`Chroma::Mono`].
+    pub planes: Vec<Plane>,
+    /// `clap`, `irot` and `imir` of the decoded item, raw, in `ipma` order, not applied.
+    pub transforms: Vec<isobmff::Transform>,
+    /// Every `colr` property of the decoded item, raw (an ICC profile is an extent of the input).
+    pub colour: Vec<isobmff::Colour>,
+    /// The colour description of the bitstream: the HEVC VUI (`None` when the SPS has none) or
+    /// the AV1 `color_config`.
+    pub cicp: Option<Cicp>,
+    /// The SEI messages (HEVC, of the first tile of a grid) or metadata OBUs (AV1), raw.
+    pub metadata: Vec<CodecMetadata>,
+}
+
+/// A decoded image: 8-bit pixels (JPEG) or coded planes (HEIF and AVIF).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Picture {
+    /// A JPEG: RGBA, or gray for a one-component gain map.
+    Pixels(Pixels),
+    /// An HEIC or AVIF image.
+    Planes(Planes),
+}
+
+impl Picture {
+    /// The pixels of a JPEG picture.
+    pub fn as_pixels(&self) -> Option<&Pixels> {
+        match self {
+            Self::Pixels(p) => Some(p),
+            Self::Planes(_) => None,
+        }
+    }
+
+    /// The planes of a HEIF or AVIF picture.
+    pub fn as_planes(&self) -> Option<&Planes> {
+        match self {
+            Self::Planes(p) => Some(p),
+            Self::Pixels(_) => None,
+        }
+    }
+
+    /// Width in pixels (luma).
+    pub fn width(&self) -> u32 {
+        match self {
+            Self::Pixels(p) => p.width,
+            Self::Planes(p) => p.width,
+        }
+    }
+
+    /// Height in pixels (luma).
+    pub fn height(&self) -> u32 {
+        match self {
+            Self::Pixels(p) => p.height,
+            Self::Planes(p) => p.height,
+        }
+    }
+}
+
 /// The decoded base image and gain map.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decoded {
-    /// The base image, RGBA.
-    pub base: Pixels,
-    /// The gain map: gray for a 1-component image, else RGBA.
-    pub gain_map: Option<Pixels>,
+    /// The base image.
+    pub base: Picture,
+    /// The gain map.
+    pub gain_map: Option<Picture>,
 }
 
 /// Picks the metadata of a gain map: valid ISO first, then valid `hdrgm` XMP. What was wrong goes

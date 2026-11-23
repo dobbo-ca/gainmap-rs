@@ -18,10 +18,12 @@ fn base_rgba_and_gray_gain_map() {
     let gm = with_segments(&jpeg_gray(8, 8), &[app1_xmp(&gm_xmp("2", "2.5"))]);
     let (data, img) = file(&gm);
     let d = gainmap::decode(&data, &img, &limits(), &no_cancel()).unwrap();
-    assert_eq!((d.base.width, d.base.height, d.base.channels), (16, 16, 4));
-    assert_eq!(d.base.data.len(), 16 * 16 * 4);
-    assert!(d.base.data.chunks(4).all(|p| p[3] == 255));
+    let b = d.base.as_pixels().unwrap();
+    assert_eq!((b.width, b.height, b.channels), (16, 16, 4));
+    assert_eq!(b.data.len(), 16 * 16 * 4);
+    assert!(b.data.chunks(4).all(|p| p[3] == 255));
     let g = d.gain_map.unwrap();
+    let g = g.as_pixels().unwrap();
     assert_eq!((g.width, g.height, g.channels), (8, 8, 1));
     assert_eq!(g.data.len(), 8 * 8);
 }
@@ -33,6 +35,7 @@ fn rgb_gain_map_is_rgba() {
     assert_eq!(img.gain_map.as_ref().unwrap().image.components, 3);
     let d = gainmap::decode(&data, &img, &limits(), &no_cancel()).unwrap();
     let g = d.gain_map.unwrap();
+    let g = g.as_pixels().unwrap();
     assert_eq!((g.width, g.height, g.channels), (8, 8, 4));
     assert_eq!(g.data.len(), 8 * 8 * 4);
 }
@@ -42,7 +45,7 @@ fn image_without_gain_map() {
     let data = jpeg_rgb(16, 16);
     let img = gainmap::read(&data, &limits(), &no_cancel()).unwrap();
     let d = gainmap::decode(&data, &img, &limits(), &no_cancel()).unwrap();
-    assert_eq!((d.base.width, d.base.height), (16, 16));
+    assert_eq!((d.base.width(), d.base.height()), (16, 16));
     assert!(d.gain_map.is_none());
 }
 
@@ -84,10 +87,11 @@ fn decoded_pixels_match_the_jpeg_decoder() {
         panic!("not rgba");
     };
     let d = gainmap::decode(&data, &img, &limits(), &no_cancel()).unwrap();
+    let base = d.base.as_pixels().unwrap();
     for y in 0..16 {
         let at = y * rgba.stride;
         assert_eq!(
-            d.base.data[y * 64..(y + 1) * 64],
+            base.data[y * 64..(y + 1) * 64],
             rgba.pix[at..at + 64],
             "row {y}"
         );
@@ -135,18 +139,58 @@ fn wrong_data_is_an_error_not_a_panic() {
     assert!(gainmap::decode(&zeros, &img, &limits(), &no_cancel()).is_err());
 }
 
+// The HEIF and AVIF files of tests/common have items that are not valid HEVC or AV1 streams: the
+// decode reaches the codec, which refuses them. Pixel parity with libheif and libavif is the job
+// of tests/parity (docs/parity.md).
 #[test]
-fn heif_pixels_are_not_supported_yet() {
+fn heif_items_that_are_not_streams_are_codec_errors() {
     let data = avif_tmap(0);
     let img = gainmap::read(&data, &limits(), &no_cancel()).unwrap();
-    assert_eq!(
-        gainmap::decode(&data, &img, &limits(), &no_cancel()),
-        Err(Error::Unsupported("av1 decode"))
-    );
+    let r = gainmap::decode(&data, &img, &limits(), &no_cancel());
+    #[cfg(feature = "avif")]
+    assert_eq!(r.map(|_| ()).unwrap_err().class(), "av1");
+    #[cfg(not(feature = "avif"))]
+    assert_eq!(r, Err(Error::Unsupported("av1 decode")));
+
     let data = heic_apple();
     let img = gainmap::read(&data, &limits(), &no_cancel()).unwrap();
-    assert_eq!(
-        gainmap::decode(&data, &img, &limits(), &no_cancel()),
-        Err(Error::Unsupported("hevc decode"))
-    );
+    let r = gainmap::decode(&data, &img, &limits(), &no_cancel());
+    #[cfg(feature = "heif")]
+    assert_eq!(r.map(|_| ()).unwrap_err().class(), "hevc");
+    #[cfg(not(feature = "heif"))]
+    assert_eq!(r, Err(Error::Unsupported("hevc decode")));
+}
+
+#[test]
+fn heif_decode_checks_cancel_first() {
+    for data in [avif_tmap(0), heic_apple()] {
+        let img = gainmap::read(&data, &limits(), &no_cancel()).unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        assert_eq!(
+            gainmap::decode(&data, &img, &limits(), &cancel),
+            Err(Error::Cancelled)
+        );
+    }
+}
+
+#[test]
+fn damaged_heif_files_never_panic_in_decode() {
+    for data in [avif_tmap(0), heic_apple()] {
+        let one = Limits {
+            max_threads: 1,
+            ..limits()
+        };
+        for n in 0..data.len() {
+            if let Ok(img) = gainmap::read(&data[..n], &one, &no_cancel()) {
+                let _ = gainmap::decode(&data[..n], &img, &one, &no_cancel());
+            }
+        }
+        for i in 0..data.len() {
+            let mut f = data.clone();
+            f[i] ^= 0xFF;
+            if let Ok(img) = gainmap::read(&f, &limits(), &no_cancel()) {
+                let _ = gainmap::decode(&f, &img, &limits(), &no_cancel());
+            }
+        }
+    }
 }

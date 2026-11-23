@@ -7,11 +7,16 @@
 #   libultrahdr v2.0.2    e5f5a022fe96fc4dc2ee35c19f733a50df807abe   Apache-2.0 (libultrahdr's
 #                                                                   gainmapmetadata.cpp: MIT OR Apache-2.0)
 #   libavif v1.4.2        c5240fc79fe5c2407e10afd35f5505ef6333ea49   BSD-2-Clause
+#   libde265 v1.0.15      17bb8d9fcea62db8cdeb0fc7ef8d15dbd19a22e4   LGPL-3.0 (a test tool here, never shipped)
+#   libheif v1.23.7       12a259a5882dd99d45ec5fc77e296a3b620d1e2e   LGPL-3.0 (same)
+#   dav1d 1.0.0 (Debian bookworm libdav1d-dev, the AV1 decoder of libavif)   BSD-2-Clause
 #   ExifTool 13.64        3d7a0538324e9b04aa8930201b007009491321d2   Perl licence (GPL or Artistic)
 #
 # libjpeg-turbo is built static with no SIMD (the output of the accurate integer DCT and of the
 # fancy upsampling is the same with and without SIMD, and nasm is not needed). libultrahdr is
-# built against it, with HEIF off. libavif is built with no codec: avifDecoderParse needs none.
+# built against it, with HEIF off. libavif is built with dav1d (the system static library), so
+# avifDecoderNextImage decodes the base image and the gain map. libheif is built with libde265 as
+# its only codec, for the HEIC planes.
 set -eu
 prefix=/opt/oracle
 src=/opt/oracle-src
@@ -35,6 +40,8 @@ pin() {
 pin libjpeg-turbo https://github.com/libjpeg-turbo/libjpeg-turbo 3.2.0 c85e6b905bf237038faa936dab160ebfc5da0344
 pin libultrahdr https://github.com/google/libultrahdr v2.0.2 e5f5a022fe96fc4dc2ee35c19f733a50df807abe
 pin libavif https://github.com/AOMediaCodec/libavif v1.4.2 c5240fc79fe5c2407e10afd35f5505ef6333ea49
+pin libde265 https://github.com/strukturag/libde265 v1.0.15 17bb8d9fcea62db8cdeb0fc7ef8d15dbd19a22e4
+pin libheif https://github.com/strukturag/libheif v1.23.7 12a259a5882dd99d45ec5fc77e296a3b620d1e2e
 pin exiftool https://github.com/exiftool/exiftool 13.64 3d7a0538324e9b04aa8930201b007009491321d2
 rm -rf /opt/exiftool
 mv "$src/exiftool" /opt/exiftool
@@ -57,17 +64,36 @@ cmake --build "$build/uhdr" -j "$(nproc)" --target uhdr
 install -D "$(find "$build/uhdr" -maxdepth 1 -name 'libuhdr*.a' | head -n 1)" "$prefix/lib/libuhdr.a"
 install -D "$src/libultrahdr/ultrahdr_api.h" "$prefix/include/ultrahdr_api.h"
 
-# libavif: static, no codec, no apps.
+# libavif: static, dav1d as the only codec, no apps.
 cmake -S "$src/libavif" -B "$build/avif" -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$prefix" -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_SHARED_LIBS=OFF \
-  -DAVIF_CODEC_AOM=OFF -DAVIF_CODEC_DAV1D=OFF -DAVIF_CODEC_LIBGAV1=OFF -DAVIF_CODEC_RAV1E=OFF \
+  -DAVIF_CODEC_AOM=OFF -DAVIF_CODEC_DAV1D=SYSTEM -DAVIF_CODEC_LIBGAV1=OFF -DAVIF_CODEC_RAV1E=OFF \
   -DAVIF_CODEC_SVT=OFF -DAVIF_LIBYUV=OFF -DAVIF_LIBSHARPYUV=OFF -DAVIF_JPEG=OFF -DAVIF_ZLIBPNG=OFF \
   -DAVIF_BUILD_APPS=OFF -DAVIF_BUILD_TESTS=OFF -DAVIF_BUILD_EXAMPLES=OFF
 cmake --build "$build/avif" -j "$(nproc)"
 cmake --install "$build/avif"
 
+# libde265 (static) and libheif (static, libde265 as the only codec, no plugins). The flags are those
+# of hevc-rs .github/ci/Dockerfile.
+export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
+cmake -S "$src/libde265" -B "$build/de265" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
+  -DCMAKE_INSTALL_LIBDIR=lib -DENABLE_SDL=OFF -DENABLE_ENCODER=OFF -DBUILD_SHARED_LIBS=OFF
+cmake --build "$build/de265" -j "$(nproc)"
+cmake --install "$build/de265"
+cmake -S "$src/libheif" -B "$build/heif" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
+  -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_PREFIX_PATH="$prefix" \
+  -DBUILD_SHARED_LIBS=OFF -DENABLE_PLUGIN_LOADING=OFF -DBUILD_TESTING=OFF -DBUILD_DOCUMENTATION=OFF \
+  -DWITH_LIBDE265=ON -DWITH_X265=OFF -DWITH_X264=OFF -DWITH_OpenH264_DECODER=OFF -DWITH_KVAZAAR=OFF \
+  -DWITH_AOM_DECODER=OFF -DWITH_AOM_ENCODER=OFF -DWITH_DAV1D=OFF -DWITH_RAV1E=OFF -DWITH_SvtEnc=OFF \
+  -DWITH_JPEG_DECODER=OFF -DWITH_JPEG_ENCODER=OFF -DWITH_OpenJPEG_DECODER=OFF -DWITH_OpenJPEG_ENCODER=OFF \
+  -DWITH_OPENJPH_ENCODER=OFF -DWITH_FFMPEG_DECODER=OFF -DWITH_UVG266=OFF -DWITH_VVDEC=OFF -DWITH_VVENC=OFF \
+  -DWITH_UNCOMPRESSED_CODEC=OFF -DWITH_HEADER_COMPRESSION=OFF -DWITH_LIBSHARPYUV=OFF \
+  -DWITH_EXAMPLES=OFF -DWITH_GDK_PIXBUF=OFF
+cmake --build "$build/heif" -j "$(nproc)"
+cmake --install "$build/heif"
+
 ls -l "$prefix/lib" "$prefix/include"
 cat > "$prefix/versions.txt" <<EOF
-Oracles: libjpeg-turbo 3.2.0 (c85e6b9), libultrahdr v2.0.2 (e5f5a02), libavif v1.4.2 (c5240fc), ExifTool 13.64 (3d7a053).
+Oracles: libjpeg-turbo 3.2.0 (c85e6b9), libultrahdr v2.0.2 (e5f5a02), libavif v1.4.2 (c5240fc) with dav1d $(dpkg-query -W -f='${Version}' libdav1d-dev), libde265 v1.0.15 (17bb8d9), libheif v1.23.7 (12a259a), ExifTool 13.64 (3d7a053).
 EOF
 rm -rf "$build" "$src"

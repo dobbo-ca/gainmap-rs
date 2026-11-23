@@ -8,7 +8,7 @@ parity oracle writes it) is `limit-<field>`.
 | Field | Default | Unit | `Limit` | Class token | Checked |
 |---|---|---|---|---|---|
 | `max_alloc` | 1 GiB | bytes, peak | `Alloc` | `limit-alloc` | `Budget::charge`, before each allocation sized from input; nested crates get the rest |
-| `max_threads` | `available_parallelism()` (1 if unknown) | threads | none | none | passed to `jpeg` by `decode`; see threading.md |
+| `max_threads` | `available_parallelism()` (1 if unknown) | threads | none | none | passed to `jpeg` and `av1` by `decode` (`hevc` is serial); see threading.md |
 | `max_pixels` | 2^30 | pixels per image | `Pixels` | `limit-pixels` | `read` for JPEG (the SOF of the base and of the chosen gain map, src/jpeg/mod.rs), `jpeg` in `decode` (from the SOF, before any allocation) and `isobmff` (`ispe`) |
 | `max_xmp_bytes` | 16 MiB | bytes | `XmpBytes` | `limit-xmp-bytes` | `exif::Xmp::parse`; the size of a HEIF XMP item before it is read. exif's own XML node limit is reported as this error too |
 | `max_segments` | 100 000 | JPEG markers outside entropy data, per image | `Segments` | `limit-segments` | src/jpeg/scan.rs, per segment, TEM or RST marker and fill byte (restart markers inside entropy data are not counted) |
@@ -16,9 +16,9 @@ parity oracle writes it) is `limit-<field>`.
 
 The other errors are not limits: `UnknownFormat`, `Truncated`, `Malformed(token)`,
 `Unsupported(token)`, `OutOfMemory` (the allocator refused a size within the limits), `Cancelled`,
-and the errors of the nested crates (`Jpeg`, `Heif`). The limit, out-of-memory and cancel errors of
-`jpeg` and `isobmff` are mapped to ours (`AllocLimit` and `Limit::Alloc` to `Alloc`, `PixelLimit`
-and `Limit::Pixels` to `Pixels`). Other `isobmff` limits (items, boxes, ...) stay `Error::Heif`.
+and the errors of the nested crates (`Jpeg`, `Heif`, `Hevc`, `Av1`). The limit, out-of-memory and cancel errors of
+`jpeg`, `isobmff`, `hevc` and `av1` are mapped to ours (`AllocLimit` and `Limit::Alloc` to `Alloc`, `PixelLimit`
+and `Limit::Pixels` to `Pixels`; the `WidthLimit` and `HeightLimit` of `hevc` and `av1` to `Pixels`, and the `MetadataLimit` of `av1`, which is carved out of `max_alloc`, to `Alloc`). Other `isobmff` limits (items, boxes, ...) stay `Error::Heif`.
 
 ## max_alloc and the budget
 
@@ -46,6 +46,25 @@ jpeg-rs treats a `max_alloc` of exactly 1 GiB as Go's unset default and may exce
 rounding of its ledger. `decode` never passes exactly that value: when the remaining budget is
 1 GiB it passes 1 GiB minus one byte, so the nested cap is always a hard peak. `max_alloc` is
 therefore the enforced peak for every value, the 1 GiB default included.
+
+## HEIF and AVIF decode
+
+`decode` runs `hevc::decode_heic_item` or `av1::decode_avif_item` on the item of the parsed graph:
+
+- **Memory.** The codec gets `Budget::remaining()` as its `max_alloc`, so the peak stays within
+  `max_alloc`. Each codec splits it itself: an eighth for the item bytes read through `isobmff`,
+  the rest for the decoder, the grid canvas and the returned picture. `av1` counts its
+  `max_metadata` (default 16 MiB) on top of `max_alloc`, so `decode` passes
+  `max_metadata = min(16 MiB, remaining / 16)` and `max_alloc = remaining - max_metadata`. The
+  planes and the metadata that come back are charged to the budget, so the gain map decodes under
+  what the base left. `oracle planes` checks on the whole corpus that half of what the result
+  holds gives `LimitExceeded(Alloc)`.
+- **Pixels.** `max_pixels` is `min(ours, 2^28)`; `hevc` also has a width and height cap of 16384
+  and `av1` one of 65536, left at their defaults.
+- **Threads.** `max_threads` goes to `av1` (grid tiles decode on up to that many workers, and
+  each worker gets its share); `hevc` is serial. The result does not depend on it (checked for 1,
+  2 and 3 on the corpus).
+- **Cancel.** Checked before the base, between the two decodes and by the codecs inside.
 
 ## Cancel
 
