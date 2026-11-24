@@ -605,8 +605,11 @@ fn heif_decode_peak_within_max_alloc() {
     assert!(files.is_empty() || checked > 0, "no generated file decoded");
 }
 
-// `gainmap::decode` of the generated files uses at most `max_threads` threads (the av1 grid
-// workers included), counted by their allocations as in `decode_threads_stay_under_max_threads`.
+// `gainmap::decode` of the generated files uses at most `max_threads` threads at once (the av1
+// grid workers included), counted by their allocations as in
+// `decode_threads_stay_under_max_threads`. The base and the gain map decode one at a time, each
+// grid with its own scoped workers, and a thread is counted for the whole run: so each image is
+// decoded alone (as `oracle planes` does), or the two sets of workers would add up.
 #[test]
 fn heif_decode_threads_stay_under_max_threads() {
     let _g = lock();
@@ -614,15 +617,22 @@ fn heif_decode_threads_stay_under_max_threads() {
         let Ok(img) = gainmap::read(data, &limits_of(1 << 30, 1), &no_cancel()) else {
             continue;
         };
-        for t in [1usize, 2] {
-            let lim = limits_of(1 << 30, t);
-            let used = threads_used(|| {
-                let _ = gainmap::decode(data, &img, &lim, &no_cancel());
-            });
-            assert!(
-                used >= 1 && used as usize <= t,
-                "{name}: {used} threads with max_threads {t}"
-            );
+        let mut picks = vec![img.base.clone()];
+        picks.extend(img.gain_map.iter().map(|g| g.image.clone()));
+        for coded in picks {
+            let mut one = img.clone();
+            one.base = coded;
+            one.gain_map = None;
+            for t in [1usize, 2] {
+                let lim = limits_of(1 << 30, t);
+                let used = threads_used(|| {
+                    let _ = gainmap::decode(data, &one, &lim, &no_cancel());
+                });
+                assert!(
+                    used >= 1 && used as usize <= t,
+                    "{name}: {used} threads with max_threads {t}"
+                );
+            }
         }
     }
 }
