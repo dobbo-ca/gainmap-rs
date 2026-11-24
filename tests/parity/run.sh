@@ -297,12 +297,12 @@ if [ "$uhdr_ok" -lt $((${PARITY_MIN_UHDR_OK:-15} / every)) ]; then
   echo "run.sh: only $uhdr_ok equal uhdr-txt files" >&2; status=1
 fi
 avif_eq=$(awk -F'\t' '$2 == "avif" && $3 == "equal" && $4 == 1' "$work/results.tsv" | wc -l | tr -d ' ')
-if [ "$avif_eq" -lt $((${PARITY_MIN_AVIF_OK:-8} / every)) ]; then
+if [ "$avif_eq" -lt $((${PARITY_MIN_AVIF_OK:-36} / every)) ]; then
   echo "run.sh: only $avif_eq equal avif files" >&2; status=1
 fi
 # The same for the decoded planes: only files both tools decoded and the Rust planes equal count.
-for spec in heifpix-base-yuv:PARITY_MIN_HEIFPIX_BASE:2 heifpix-gm-yuv:PARITY_MIN_HEIFPIX_GM:2 \
-            avifpix-base-yuv:PARITY_MIN_AVIFPIX_BASE:10 avifpix-gm-yuv:PARITY_MIN_AVIFPIX_GM:6; do
+for spec in heifpix-base-yuv:PARITY_MIN_HEIFPIX_BASE:6 heifpix-gm-yuv:PARITY_MIN_HEIFPIX_GM:6 \
+            avifpix-base-yuv:PARITY_MIN_AVIFPIX_BASE:38 avifpix-gm-yuv:PARITY_MIN_AVIFPIX_GM:26; do
   ch=${spec%%:*}; rest=${spec#*:}; var=${rest%%:*}; dflt=${rest#*:}
   eq=$(awk -F'\t' -v ch="$ch" '$2 == ch && $3 == "equal" && $4 == 1' "$work/results.tsv" | wc -l | tr -d ' ')
   eval "want=\${$var:-$dflt}"
