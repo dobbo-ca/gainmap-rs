@@ -28,6 +28,7 @@ if let Some(gm) = &image.gain_map {
 
 `Planes` keep the coded bit depth and chroma format, the `clap`/`irot`/`imir` list and the `colr`
 properties as stored (not applied: docs/design.md says why), the codec CICP and SEI/OBU metadata.
+For an `iden` item they are the `iden` item's own; the input item's are in `GainMapImage::heif()`.
 Cargo features `heif` (HEVC) and `avif` (AV1) are on by default; off, `decode` says `Unsupported`.
 
 ## Resource limits
@@ -53,7 +54,10 @@ Details: [docs/limits.md](docs/limits.md).
 - A gain map is never dropped: bad metadata gives `metadata: None` and the reason in `issues`.
 - Deviation from the keep-metadata-with-a-drop-option rule: `decode` has no option to drop the SEI,
   metadata OBUs and `colr` data it returns (and charges to `max_alloc`); it keeps them, so nothing
-  is lost. `hevc` drops SEI past 1 MiB per picture without an error.
+  is lost. SEI is never dropped silently: `decode` raises `hevc`'s `max_metadata` to the
+  remaining budget, so it is kept or the decode fails with `LimitExceeded(Alloc)`. The option is
+  absent because the Planes API reports the coded data as stored; a caller that does not want it
+  drops the fields.
 
 HEVC is covered by patent pools; AV1 is royalty-free. Low risk for a private app; review before
 anything public.

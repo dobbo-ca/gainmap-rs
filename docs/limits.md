@@ -53,23 +53,25 @@ therefore the enforced peak for every value, the 1 GiB default included.
 
 - **Memory.** The codec gets `Budget::remaining()` as its `max_alloc`, so the peak stays within
   `max_alloc`. Each codec splits it itself: an eighth for the item bytes read through `isobmff`,
-  the rest for the decoder, the grid canvas and the returned picture. `av1` counts its
-  `max_metadata` (default 16 MiB) on top of `max_alloc`, so `decode` passes
-  `max_metadata = min(16 MiB, remaining / 16)` and `max_alloc = remaining - max_metadata`. The
-  planes and the metadata that come back are charged to the budget, so the gain map decodes under
-  what the base left. `oracle planes` checks on the whole corpus that half of what the result
-  holds gives `LimitExceeded(Alloc)`.
-- **Item graph.** The two `isobmff::Image` values that are live at once (the one `decode` parses
-  and the one the codec parses again) are charged with the same bound as `read`
-  (`image_cost`) and released when the codec returns; the transforms and `colr` properties that
-  move into `Planes` stay charged. The `max_images` count (`tmap` items and `altr` groups) runs
-  for the item and, for a grid, for every tile, because the codecs call `Heif::image` on each
-  tile and that call has no cancel check.
+  the rest for the decoder, the grid canvas and the returned picture. `av1` books the metadata
+  OBUs and the grid tile frames it keeps in that same ledger (all decoders of the call, not
+  `max_metadata` per frame and per decoder), so `decode` carves nothing out for them. `hevc` books
+  its SEI in its ledger too. The planes and the metadata that come back are charged to the budget,
+  so the gain map decodes under what the base left. `oracle planes` checks on the whole corpus
+  that half of what the result holds gives `LimitExceeded(Alloc)`.
+- **Item graph.** The `isobmff::Image` values that are live at once (the one `decode` parses, the
+  one the codec parses again, and for a grid the tile images: one for `hevc`, up to `max_threads`
+  workers for `av1`) are charged with the same bound as `read` (`image_cost`), for
+  `2 + min(max_threads, 64)` images, and released when the codec returns; the transforms and
+  `colr` properties that move into `Planes` stay charged. The `max_images` count (`tmap` items
+  and `altr` groups) runs for the item and, for a grid, for every distinct tile in one pass over
+  the references and groups, because the codecs call `Heif::image` on each tile and that call
+  has no cancel check.
 - **`iden`.** An `iden` item is decoded as its input (a chain of up to 8, followed by `decode`
   before the codec runs). The planes carry the `iden` item's own transforms and `colr`
-  properties; the input item's are not reported.
-- **SEI.** `hevc` keeps at most 1 MiB of SEI messages per picture (its `max_metadata` default)
-  and drops the rest without an error; `decode` leaves that default.
+  properties; the input item's are not reported (read them from `GainMapImage::heif()`).
+- **SEI.** `decode` passes `hevc` a `max_metadata` equal to what is left of `max_alloc`, so SEI
+  is never dropped silently: it is kept, or the decode fails with `LimitExceeded(Alloc)`.
 - **Pixels.** `max_pixels` is `min(ours, 2^28)`; `hevc` also has a width and height cap of 16384
   and `av1` one of 65536, left at their defaults.
 - **Threads.** `max_threads` goes to `av1` (grid tiles decode on up to that many workers, and

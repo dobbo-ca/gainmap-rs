@@ -26,7 +26,8 @@ const CODEC_MAX_PIXELS: u64 = 1 << 28;
 /// it returns are charged to it. The two decodes run one after the other; each uses up to
 /// `limits.max_threads` threads inside `jpeg` or `av1` (`hevc` decodes on the calling thread).
 /// `max_pixels` is the smaller of ours and 2^28, the cap of `hevc` and `av1`; their width and
-/// height defaults apply.
+/// height defaults apply. `max_images` bounds the `tmap` items and `altr` groups of the item and
+/// of every tile of a grid.
 ///
 /// A JPEG that decodes with an error beside its pixels (`jpeg::Decoded::error`, a truncated scan)
 /// is an error here: [`Error::Jpeg`].
@@ -36,8 +37,10 @@ const CODEC_MAX_PIXELS: u64 = 1 << 28;
 /// [`Error::Unsupported`] (`"hevc decode"` or `"av1 decode"`) when the Cargo feature `heif` or
 /// `avif` is off; [`Error::Malformed`] when `image` has no byte range or item id;
 /// [`Error::Truncated`] when the range is not inside `data`; [`Error::LimitExceeded`] for
-/// `max_alloc` and `max_pixels` (the `hevc` and `av1` limit errors map to these);
-/// [`Error::OutOfMemory`]; [`Error::Cancelled`] (checked between the two decodes and by the
+/// `max_alloc`, `max_pixels` and `max_images` (`Limit::Images`; the `hevc` and `av1` limit errors
+/// map to the first two); [`Error::Unsupported`] (`"heif-identity-depth"`) for an `iden` chain
+/// deeper than 8; [`Error::Malformed`] (`"planes"`, `"av1-chroma"`) when a codec returns planes
+/// that do not fit their chroma format; [`Error::OutOfMemory`]; [`Error::Cancelled`] (checked between the two decodes and by the
 /// codec inside each); [`Error::Heif`], [`Error::Jpeg`], [`Error::Hevc`] and [`Error::Av1`] for
 /// the other errors. `data` must be the input that [`read`](crate::read) got.
 pub fn decode(
@@ -117,8 +120,9 @@ fn decode_one(
 }
 
 /// The graph, the id of the coded or grid item to decode, the parsed item (for its transforms and
-/// colours) and the bytes charged for the `isobmff::Image` values (two live: this one and the one
-/// the codec builds); the caller releases them when the codec has returned.
+/// colours) and the bytes charged for the `isobmff::Image` values (live at once: this one, the one
+/// the codec builds and, for a grid, the tile images: one for `hevc`, up to `max_threads` for
+/// `av1`, bounded here by 64); the caller releases them when the codec has returned.
 #[cfg(any(feature = "heif", feature = "avif"))]
 fn heif_item<'a>(
     whole: &'a GainMapImage,
@@ -130,7 +134,7 @@ fn heif_item<'a>(
     let Location::Item(id) = img.location else {
         return Err(Error::Malformed("location"));
     };
-    let cost = crate::heif::image_cost(heif);
+    let cost = crate::heif::image_cost(heif, 2 + limits.max_threads.clamp(1, 64));
     budget.charge(cost)?;
     match resolve_item(heif, id, limits, budget) {
         Ok((coded, item)) => Ok((heif, coded, item, cost)),
@@ -177,12 +181,7 @@ fn resolve_item(
         return Err(Error::Unsupported("heif-identity-depth"));
     }
     if let isobmff::ImageKind::Grid(g) = &tail.as_ref().unwrap_or(&item).kind {
-        for (i, tile) in g.tiles.iter().enumerate() {
-            if i.is_multiple_of(64) {
-                budget.check_cancel()?;
-            }
-            crate::heif::check_id(heif, *tile, limits, budget)?;
-        }
+        crate::heif::check_ids(heif, &g.tiles, limits, budget)?;
     }
     Ok((coded, item))
 }
@@ -206,6 +205,9 @@ fn hevc_planes(
         max_alloc: budget.remaining(),
         max_threads: limits.max_threads,
         max_pixels: codec_pixels(limits),
+        // The SEI is booked in the codec's ledger, so with this it is kept or the decode fails;
+        // the default 1 MiB would drop messages without an error.
+        max_metadata: budget.remaining(),
         ..hevc::Limits::default()
     };
     let pic = hevc::decode_heic_item(
@@ -275,16 +277,12 @@ fn av1_planes(
     limits: &Limits,
     budget: &Budget<'_>,
 ) -> Result<Planes, Error> {
-    // `max_metadata` is counted on top of `max_alloc` in `av1`, so it is carved out of what is
-    // left: the two together never pass it.
-    let left = budget.remaining();
-    let max_metadata = left / 16;
-    let max_metadata = max_metadata.min(av1::Limits::default().max_metadata);
+    // `av1` books the metadata it keeps in its ledger (all decoders of the call), so `max_alloc`
+    // is the whole peak.
     let nested = av1::Limits {
-        max_alloc: left - max_metadata,
+        max_alloc: budget.remaining(),
         max_threads: limits.max_threads,
         max_pixels: codec_pixels(limits),
-        max_metadata,
         ..av1::Limits::default()
     };
     let frame = av1::decode_avif_item(

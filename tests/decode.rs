@@ -225,6 +225,34 @@ fn grid_tiles_are_counted_before_the_codec_runs() {
     );
 }
 
+// One tile id repeated across a wide grid is counted once, in one pass, and still fails when
+// more `tmap` items than `max_images` link it.
+#[cfg(feature = "avif")]
+#[test]
+fn repeated_grid_tile_is_counted() {
+    let mut s = Heif::new(b"avif");
+    s.primary = 5;
+    let size = s.prop(ispe(12800, 48));
+    let tile = s.prop(ispe(64, 48));
+    let cfg = s.prop(av1c());
+    s.item(1, b"av01", &[1; 4], &[tile, cfg]);
+    s.item(5, b"grid", &[0, 0, 0, 199, 0x32, 0, 0, 48], &[size]);
+    s.link(b"dimg", 5, &[1; 200]);
+    for k in 0..3 {
+        s.item(10 + k, b"tmap", &tmap_payload(0), &[]);
+        s.link(b"dimg", 10 + k, &[1]);
+    }
+    let data = s.build();
+    let l = Limits {
+        max_images: 2,
+        ..limits()
+    };
+    let img = gainmap::read(&data, &l, &no_cancel());
+    // `read` may already refuse the base (it counts the first tile); either way it is `Images`.
+    let r = img.and_then(|i| gainmap::decode(&data, &i, &l, &no_cancel()).map(|_| ()));
+    assert_eq!(r, Err(Error::LimitExceeded(Limit::Images)));
+}
+
 // An `iden` base reaches the codec as its input: hevc refuses an `iden` item itself.
 #[cfg(feature = "heif")]
 #[test]

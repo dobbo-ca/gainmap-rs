@@ -108,11 +108,12 @@ fn graph_cost(h: &Heif) -> usize {
     sum
 }
 
-/// A bound for the Vecs that two live [`Heif::image`] results hold (the base image and one
-/// transient image): aux ids, thumbnails and grid tiles are each at most the `to` ids in the file;
+/// A bound for the Vecs that `live` [`Heif::image`] results hold at once (`read`: the base image
+/// and one transient image; `decode`: see there): aux ids, thumbnails and grid tiles are each at
+/// most the `to` ids in the file;
 /// transforms and colours are at most the associations of one item; an overlay image holds a
 /// clone of the inputs of its item.
-pub(crate) fn image_cost(h: &Heif) -> usize {
+pub(crate) fn image_cost(h: &Heif, live: usize) -> usize {
     let to_total = h
         .references
         .iter()
@@ -130,7 +131,7 @@ pub(crate) fn image_cost(h: &Heif) -> usize {
             assoc.saturating_mul(size_of::<isobmff::Transform>() + size_of::<isobmff::Colour>()),
         )
         .saturating_add(inputs.saturating_mul(size_of::<isobmff::OverlayInput>()));
-    per_image.saturating_mul(2)
+    per_image.saturating_mul(live)
 }
 
 /// [`Heif::image`] looks for a gain map every time, and `isobmff` does that in time proportional
@@ -143,42 +144,54 @@ pub(crate) fn checked_image(
     limits: &Limits,
     budget: &Budget<'_>,
 ) -> Result<isobmff::Image, Error> {
-    check_id(heif, id, limits, budget)?;
+    check_ids(heif, &[id], limits, budget)?;
     Ok(heif.image(id)?)
 }
 
-/// The count of [`checked_image`] without the `Heif::image` call: `decode` runs it for every tile
-/// of a grid, because the codecs call `Heif::image` on each of them.
-pub(crate) fn check_id(
+/// The count of [`checked_image`] without the `Heif::image` call, for every id of `ids` in one
+/// pass: `decode` runs it on the tiles of a grid, because the codecs call `Heif::image` on each
+/// of them. The ids are sorted and deduplicated first, so the cost is linear in the references
+/// and groups (times a binary search), not in tiles times references.
+pub(crate) fn check_ids(
     heif: &Heif,
-    id: u32,
+    ids: &[u32],
     limits: &Limits,
     budget: &Budget<'_>,
 ) -> Result<(), Error> {
-    let mut tmaps = 0usize;
+    let mut ids = ids.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    let mut tmaps = vec![0usize; ids.len()];
+    let mut groups = vec![0usize; ids.len()];
     for (i, r) in heif.references.iter().enumerate() {
         if i.is_multiple_of(1024) {
             budget.check_cancel()?;
         }
         if r.kind.0 == *b"dimg"
-            && r.to.contains(&id)
             && heif
                 .item(r.from)
                 .is_some_and(|it| it.item_type.0 == *b"tmap")
         {
-            tmaps += 1;
+            for to in &r.to {
+                if let Ok(k) = ids.binary_search(to) {
+                    tmaps[k] += 1;
+                }
+            }
         }
     }
-    let mut groups = 0usize;
     for (i, g) in heif.groups.iter().enumerate() {
         if i.is_multiple_of(1024) {
             budget.check_cancel()?;
         }
-        if g.kind.0 == *b"altr" && g.entities.contains(&id) {
-            groups += 1;
+        if g.kind.0 == *b"altr" {
+            for e in &g.entities {
+                if let Ok(k) = ids.binary_search(e) {
+                    groups[k] += 1;
+                }
+            }
         }
     }
-    if tmaps > limits.max_images || groups > limits.max_images {
+    if tmaps.iter().chain(&groups).any(|&n| n > limits.max_images) {
         return Err(Error::LimitExceeded(Limit::Images));
     }
     Ok(())
@@ -273,7 +286,7 @@ pub(crate) fn read(
 ) -> Result<GainMapImage, Error> {
     let heif = isobmff::parse(data, &nested_limits(limits, budget), budget.cancel())?;
     budget.charge(graph_cost(&heif))?;
-    let images = image_cost(&heif);
+    let images = image_cost(&heif, 2);
     budget.charge(images)?;
 
     // A file with a gain map may name the `tmap` item as primary; the base is its first input.
