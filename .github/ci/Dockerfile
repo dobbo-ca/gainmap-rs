@@ -101,13 +101,36 @@ RUN mkdir -p /opt/oracle/bin \
     && gcc -O2 -std=gnu99 -Wall -c -o /tmp/heif_oracle.o /oracle-src/heif_oracle.c $(pkg-config --cflags libheif) \
     && g++ -o /opt/oracle/bin/heif_oracle /tmp/heif_oracle.o -static-libstdc++ -static-libgcc $(pkg-config --static --libs libheif)
 
+# The generators of the hand-built corpus files (tests/parity/gen.sh, docs/corpus.md), built from
+# source and pinned by tag and commit, CI-only like the oracles. Two stages so a failure of one does
+# not rebuild the other; each copies only its script.
+FROM toolchain AS gen-avif
+RUN apt-get update && apt-get install -y --no-install-recommends cmake g++ make git ca-certificates pkg-config nasm \
+       libjpeg-dev libpng-dev libxml2-dev zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY .github/ci/build-gen-avif.sh /build-gen-avif.sh
+RUN sh /build-gen-avif.sh
+
+FROM toolchain AS gen-heic
+RUN apt-get update && apt-get install -y --no-install-recommends cmake g++ make git ca-certificates pkg-config nasm libx265-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY .github/ci/build-gen-heic.sh /build-gen-heic.sh
+RUN sh /build-gen-heic.sh
+
+# The oracle tools plus the two generators and the runtime libraries of their dynamic links.
+FROM oracle-tools AS gen-run
+RUN apt-get update && apt-get install -y --no-install-recommends libjpeg62-turbo libpng16-16 libxml2 libx265-199 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=gen-avif /opt/gen /opt/gen
+COPY --from=gen-heic /opt/gen /opt/gen
+
 # Parity: fetch.sh puts the public corpus into the shared /corpus cache mount (once per BuildKit
-# cache), run.sh compares examples/oracle.rs with libultrahdr + libjpeg-turbo (pixels and metadata),
+# cache), gen.sh makes the generated files beside it (every run), run.sh compares examples/oracle.rs with libultrahdr + libjpeg-turbo (pixels and metadata),
 # libavif (fractions) and ExifTool (XMP) over it, runs the mutations through the Rust oracle, and
 # writes /report (summary.md, status). The step never fails on a parity difference, so the report
 # is kept; the workflow fails the job when /report/status is not 0 (if run.sh wrote no status, the
 # status of its exit is written here).
-FROM oracle-tools AS parity
+FROM gen-run AS parity
 COPY --from=deps /usr/local/cargo/registry /usr/local/cargo/registry
 COPY --from=deps /usr/local/cargo/git /usr/local/cargo/git
 ENV CARGO_NET_OFFLINE=true
@@ -116,6 +139,7 @@ RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
     --mount=type=cache,id=gainmap-corpus,target=/corpus,sharing=locked \
     find src examples tests -name '*.rs' -exec touch {} + \
     && sh tests/parity/fetch.sh /corpus \
+    && sh tests/parity/gen.sh /corpus \
     && cargo build --locked --release --example oracle \
     && { sh tests/parity/run.sh /corpus target/release/examples/oracle /report; st=$?; \
          mkdir -p /report; [ -s /report/status ] || echo $st > /report/status; }

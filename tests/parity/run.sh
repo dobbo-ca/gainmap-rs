@@ -47,9 +47,9 @@ every=${PARITY_EVERY_N:-1}
 n=$(sh "$here/inputs.sh" "$corpus" "$work/in" "$every") || { echo "run.sh: inputs.sh failed" >&2; status=1; }
 case $n in ''|*[!0-9]*) n=0 ;; esac
 echo "inputs: $n"
-# An empty or partial corpus must not pass: corpus.tsv lists PARITY_MIN_INPUTS files (divided
+# An empty or partial corpus must not pass: corpus.tsv and gen.sh list PARITY_MIN_INPUTS files (divided
 # by every-n).
-min=$((${PARITY_MIN_INPUTS:-56} / every))
+min=$((${PARITY_MIN_INPUTS:-77} / every))
 if [ "$n" -lt "$min" ]; then echo "run.sh: $n inputs, want at least $min" >&2; status=1; fi
 
 fail() { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$report/failures.tsv"; status=1; }
@@ -297,12 +297,12 @@ if [ "$uhdr_ok" -lt $((${PARITY_MIN_UHDR_OK:-15} / every)) ]; then
   echo "run.sh: only $uhdr_ok equal uhdr-txt files" >&2; status=1
 fi
 avif_eq=$(awk -F'\t' '$2 == "avif" && $3 == "equal" && $4 == 1' "$work/results.tsv" | wc -l | tr -d ' ')
-if [ "$avif_eq" -lt $((${PARITY_MIN_AVIF_OK:-8} / every)) ]; then
+if [ "$avif_eq" -lt $((${PARITY_MIN_AVIF_OK:-26} / every)) ]; then
   echo "run.sh: only $avif_eq equal avif files" >&2; status=1
 fi
 # The same for the decoded planes: only files both tools decoded and the Rust planes equal count.
-for spec in heifpix-base-yuv:PARITY_MIN_HEIFPIX_BASE:2 heifpix-gm-yuv:PARITY_MIN_HEIFPIX_GM:2 \
-            avifpix-base-yuv:PARITY_MIN_AVIFPIX_BASE:10 avifpix-gm-yuv:PARITY_MIN_AVIFPIX_GM:6; do
+for spec in heifpix-base-yuv:PARITY_MIN_HEIFPIX_BASE:6 heifpix-gm-yuv:PARITY_MIN_HEIFPIX_GM:6 \
+            avifpix-base-yuv:PARITY_MIN_AVIFPIX_BASE:38 avifpix-gm-yuv:PARITY_MIN_AVIFPIX_GM:26; do
   ch=${spec%%:*}; rest=${spec#*:}; var=${rest%%:*}; dflt=${rest#*:}
   eq=$(awk -F'\t' -v ch="$ch" '$2 == ch && $3 == "equal" && $4 == 1' "$work/results.tsv" | wc -l | tr -d ' ')
   eval "want=\${$var:-$dflt}"
@@ -322,7 +322,13 @@ fi
   cat /opt/oracle/versions.txt 2>/dev/null
   echo "ExifTool $(perl "$exiftool" -ver)"
   echo
-  echo "Inputs: $n (corpus.tsv, docs/corpus.md)"
+  echo "Inputs: $n (corpus.tsv and the generated files, docs/corpus.md)"
+  if [ -s "$corpus/gen.tsv" ]; then
+    echo
+    echo "Generated files (gen.sh; sha256, size, same bytes on two runs of the generator):"
+    echo
+    sed "s|^|- |; s|\t| |g" "$corpus/gen.tsv"
+  fi
   echo
   echo "## libultrahdr 2.0.2 + libjpeg-turbo 3.2.0, and libavif 1.4.2"
   echo

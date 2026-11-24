@@ -27,8 +27,8 @@
 //                               transforms as "crop L T R B" ("crop inexact" when the clap is not
 //                               an exact crop), "imir axis" and "irot degrees", in that order
 //
-// The gain-map file is written only when libavif found a gain map. It takes the transforms of
-// the gain-map image as libavif keeps them (libavif requires them to equal the base image's).
+// The gain-map file is written only when libavif found a gain map. It takes the transforms of the base image
+// (libavif keeps none on the gain-map image and requires them to equal the base image's).
 //
 // This file is part of gainmap-rs (Apache-2.0). It calls the public API of libavif (BSD-2-Clause).
 
@@ -71,8 +71,10 @@ static uint8_t * read_file(const char * path, size_t * size)
     return buf;
 }
 
-/* The planes and the transforms of `image` into <out>/<name>.<which>.yuv and .info. */
-static void dump_image(const char * out, const char * name, const char * which, const avifImage * image)
+/* The planes of `image` and the transforms of `tr` into <out>/<name>.<which>.yuv and .info. libavif keeps the
+ * transforms on the decoded image only, and `gainMap->image` has none (read.c requires the gain-map item to have
+ * the same clap, irot and imir as the base image), so the gain map takes the base image as `tr`. */
+static void dump_image(const char * out, const char * name, const char * which, const avifImage * image, const avifImage * tr)
 {
     char path[4096];
     avifPixelFormatInfo info;
@@ -107,18 +109,18 @@ static void dump_image(const char * out, const char * name, const char * which, 
     f = fopen(path, "wb");
     if (!f) return;
     fprintf(f, "%u %u %d %u %u\n", image->width, image->height, chroma, image->depth, image->depth);
-    if (image->transformFlags & AVIF_TRANSFORM_CLAP) {
+    if (tr->transformFlags & AVIF_TRANSFORM_CLAP) {
         avifCropRect r;
         avifDiagnostics diag;
         memset(&diag, 0, sizeof diag);
-        if (avifCropRectFromCleanApertureBox(&r, &image->clap, image->width, image->height, &diag)) {
+        if (avifCropRectFromCleanApertureBox(&r, &tr->clap, image->width, image->height, &diag)) {
             fprintf(f, "crop %u %u %u %u\n", r.x, r.y, image->width - r.x - r.width, image->height - r.y - r.height);
         } else {
             fprintf(f, "crop inexact\n");
         }
     }
-    if (image->transformFlags & AVIF_TRANSFORM_IMIR) fprintf(f, "imir %u\n", image->imir.axis);
-    if (image->transformFlags & AVIF_TRANSFORM_IROT) fprintf(f, "irot %u\n", image->irot.angle * 90u);
+    if (tr->transformFlags & AVIF_TRANSFORM_IMIR) fprintf(f, "imir %u\n", tr->imir.axis);
+    if (tr->transformFlags & AVIF_TRANSFORM_IROT) fprintf(f, "irot %u\n", tr->irot.angle * 90u);
     fclose(f);
 }
 
@@ -174,9 +176,9 @@ static void describe(const uint8_t * data, size_t size, char * text, size_t cap,
     }
     // The planes, where libavif can decode them (dav1d). A failure writes nothing.
     if (parsed && avifDecoderNextImage(decoder) == AVIF_RESULT_OK && decoder->image && decoder->image->yuvPlanes[0]) {
-        dump_image(out, name, "base", decoder->image);
+        dump_image(out, name, "base", decoder->image, decoder->image);
         const avifGainMap * gm = decoder->image->gainMap;
-        if (gm && gm->image && gm->image->yuvPlanes[0]) dump_image(out, name, "gm", gm->image);
+        if (gm && gm->image && gm->image->yuvPlanes[0]) dump_image(out, name, "gm", gm->image, decoder->image);
     }
     avifDecoderDestroy(decoder);
 }

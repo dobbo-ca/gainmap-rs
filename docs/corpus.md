@@ -1,12 +1,12 @@
 # Parity corpus
 
-The parity run (docs/parity.md) reads public files only. Every file has a clear licence, which
+The parity run (docs/parity.md) reads public files, and files generated in CI from them with open-source tools. Every file has a clear licence, which
 is recorded here and in `tests/parity/corpus.tsv`. No file is kept in this repository:
 `tests/parity/fetch.sh` downloads them into the CI cache mount `/corpus`, checks the size (and the
 SHA-256 where it is pinned) and prints the SHA-256 of each file, so a "-" in `corpus.tsv` can be
 pinned after the first run. No personal photos of ours are used.
 
-Sources, 56 files in all:
+Sources, 56 fetched files in all (and 21 generated ones, see "Generated files"):
 
 | Source | Files | Licence | Pinned to |
 |---|---|---|---|
@@ -95,6 +95,60 @@ Name is the local file name (`corpus.tsv`). Sizes are bytes.
 | apple_hdr_sample.heic | 238982 | MIT | johncf/apple-hdr-heic tests/data/hdr-sample.heic (Git LFS) |
 | uhdr_gainmap_hevc_16x16.heic | 1523 (SHA-256 in corpus.tsv, equal to the one in the libultrahdr fixture README) | Apache-2.0 OR MIT (libultrahdr tests/data/GAINMAP_FIXTURE_README.md, "Fixture-specific license") | libultrahdr commit 66821e0 tests/data/gainmap_hevc_16x16.heic |
 | colors_hdr_p3.avif, colors_hdr_rec2020.avif, colors_hdr_srgb.avif, colors_text_hdr_p3.avif, colors_text_hdr_rec2020.avif, colors_text_hdr_srgb.avif, colors_text_wcg_hdr_rec2020.avif, seine_hdr_srgb.avif | 26532, 24065, 28030, 29054, 28573, 34458, 33242, 168028 (SHA-256 in corpus.tsv) | BSD-2-Clause (tests/data/README.md: "same as libavif") | libavif v1.4.2 tests/data/<name> |
+
+## Generated files
+
+The public corpus has no HEIF/AVIF gain map with `irot`, `imir` or `clap`, none with a 4:0:0 gain
+map, a 10- or 12-bit gain map or a grid gain map, and only one licensed HEIC `tmap`. So CI builds
+21 more files, hand-made from corpus inputs by CI-only tools. They are never committed and never
+fetched: `tests/parity/gen.sh <corpus>` writes them to `<corpus>/files/gen_*` on every parity run
+(names in `<corpus>/gen.names`, which `inputs.sh` reads), and they go through the same channels as
+the fetched files (the libavif, libheif and ExifTool channels, the `planes` limit, thread and
+cancel checks). Every file is made twice and the outputs are compared; the report lists name,
+SHA-256, size and "same bytes" for each. A file listed in `tests/parity/gen-pins.tsv` must have
+that SHA-256, or `gen.sh` fails. All 21 are pinned. Sixteen (the 13 AVIFs made from the seine inputs
+and 3 of the HEICs) gave the same bytes in runs 45295848457 and 45297466465; the other 5 (the 4
+`gen_tmap_ds*` and `gen_uhdr_p010_pq_bt2100.heic`) changed when `UHDR_WRITE_XMP=ON` was added, and
+agree between run 45297466465 and run 45299063870. Every file was
+also the same on the two runs inside each parity run. A new generator version means new pins.
+
+Tools, each pinned by tag and commit in `.github/ci/build-gen-avif.sh` and `build-gen-heic.sh`,
+built in their own Dockerfile stages, CI-only, never a dependency of a crate:
+
+| Tool | Version | Licence | Made |
+|---|---|---|---|
+| libaom (the AV1 encoder) | v3.14.1 `03087864cf4b` | BSD-2-Clause and the AOM patent licence | |
+| libavif `avifenc`, `avifgainmaputil combine` | v1.4.2 `c5240fc79fe5` | BSD-2-Clause | the AVIFs |
+| libultrahdr `ultrahdr_app` (`UHDR_WRITE_XMP=ON`) | v2.0.2 `e5f5a022fe96` | Apache-2.0 | the HEICs and one JPEG |
+| libheif `4a3f74bc` with libultrahdr's `libheif_pr1503.patch` (`tmap` writing, open libheif PR 1503) | fetched by libultrahdr's build | LGPL-3.0 | inside `ultrahdr_app` |
+| x265 (the HEVC encoder), Debian bookworm 3.5 | | GPL-2.0-or-later | inside `ultrahdr_app` |
+| libjpeg-turbo (libultrahdr's own build), libjpeg, libpng, libxml2, zlib (Debian bookworm) | | BSD-3-Clause, IJG, zlib, MIT | the JPEG and PNG readers of the apps |
+
+Settings are fixed: aom speed 6, one thread (`-j 1`), default quality (colour 60, gain map 60), libultrahdr
+defaults except where a name says otherwise. Inputs: `seine_sdr_gainmap_srgb.jpg` (base, 400x300
+8-bit with a gain map that `combine` ignores) and `seine_hdr_srgb.avif` (the HDR alternate, 10-bit),
+both BSD-2-Clause libavif test files from the corpus, and `raw_p010_image.p010`, a 1280x720 P010
+image from libultrahdr `tests/data` at commit e5f5a02 (CC-BY-4.0, `tests/data/LICENSE`; it is read
+and encoded, never kept). `combine` runs with `--ignore-profile`, because libavif cannot compute a
+gain map for an image with an ICC profile.
+
+| File | Made with | What it adds |
+|---|---|---|
+| `gen_tmap_irot1.avif`, `gen_tmap_irot3_imir1.avif`, `gen_tmap_imir0.avif` | `avifenc --irot/--imir` on the seine JPEG | `irot` and `imir` on the base and the gain-map item of a `tmap` file |
+| `gen_tmap_ds.avif`, `gen_tmap_ds_clap.avif`, `gen_tmap_ds_irot2_clap.avif`, `gen_tmap_ds_irot1_imir0_clap.avif` | `ultrahdr_app -s 2` writes a 1280x720 Ultra HDR JPEG with a 640x360 gain map, `avifenc` converts it, with `--crop 8,8,1264,704` (`clap`), `--irot`, `--imir` | `clap`, alone and with `irot` and `imir`, on a `tmap` file with a half-size gain map. libavif writes a `clap` on a `tmap` file only when the gain map is not the size of the base image (`write.c`, `AVIF_RESULT_NOT_IMPLEMENTED` otherwise), so the same-size JPEG cannot carry one |
+| `gen_gm_yuv400.avif`, `gen_gm_depth10.avif`, `gen_gm_depth12_yuv400.avif` | `avifgainmaputil combine --yuv-gain-map 400`, `--depth-gain-map 10`, `12` | a 4:0:0 gain map, 10- and 12-bit gain maps |
+| `gen_gm_down2.avif`, `gen_gm_down4_yuv420.avif` | `combine --downscaling 2` and `4` (with `--yuv-gain-map 420`) | a gain map of half and a quarter the size |
+| `gen_grid2x2.avif`, `gen_grid2x2_gm_yuv400_depth10.avif` | `combine --grid 2x2` | a grid base and a grid gain map (libavif splits both), also with a 4:0:0 10-bit gain map |
+| `gen_base10_yuv420.avif`, `gen_base12_yuv422.avif` | `combine --depth 10 --yuv 420`, `--depth 12 --yuv 422` | a 10-bit 4:2:0 and a 12-bit 4:2:2 base |
+| `gen_base_hdr10.avif` | `combine <hdr avif> <sdr jpg>` | a 10-bit HDR base (the SDR image is the alternate) |
+| `gen_uhdr_p010.heic`, `gen_uhdr_p010_mono.heic` (`-M 0`), `gen_uhdr_p010_down2.heic` (`-s 2`), `gen_uhdr_p010_pq_bt2100.heic` (`-t 2 -C 2`) | `ultrahdr_app -m 0 -a 0` on the P010 image | HEIC `tmap` files with real content: a 3-channel and a single-channel gain map, a half-size gain map, PQ and BT.2100 input |
+
+Still not covered, because no tool in the CI image writes it: a HEIC with `irot`, `imir`, a grid
+base or a 10-bit base (`ultrahdr_app` has no option for them, and its libheif patch encodes one
+8-bit image per item; a C driver against the patched libheif would be the way, not built), a HEIC
+grid gain map (libheif PR 1503 takes one image), and an iOS 18 HEIC (Apple `auxl` gain map plus a
+`tmap`; no licensed sample). `parity-arm64` does not run `gen.sh` (its image has no generators);
+it reads the generated files only when the shared corpus cache holds those of an earlier parity run.
 
 ## Attribution
 

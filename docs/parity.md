@@ -299,6 +299,39 @@ libavif plane for plane (every sample, the size, chroma format, bit depths and t
 with 0 mismatches. The known lines are listed above. The pre-existing channels stayed equal
 (`uhdr-txt` 49 equal and 7 known, `avif` 19 equal and 4 known, XMP: 412 values compared, 412 match).
 
+### Generated files (run 45297466465, 77 inputs)
+
+`tests/parity/gen.sh` (docs/corpus.md "Generated files") adds 21 files to the 56 fetched ones: 17
+AVIFs from libavif v1.4.2 (`avifenc`, `avifgainmaputil combine`, aom v3.14.1) and 4 HEICs from
+libultrahdr v2.0.2 (libheif PR 1503 patch, x265). The stage `gen-run` of `.github/ci/Dockerfile`
+holds the generators; the `parity` stage runs `gen.sh` after `fetch.sh`, on every run (the files
+are not cached; `gen-pins.tsv` pins their SHA-256). They go through every channel above with no
+special case. The counts of that run:
+
+| channel | inputs | C tool decoded | equal | differ | known |
+|---|---:|---:|---:|---:|---:|
+| `heifpix-base-info` / `-yuv` | 6 | 6 | 6 | 0 | 0 |
+| `heifpix-gm-info` / `-yuv` | 6 | 6 | 6 | 0 | 0 |
+| `avifpix-base-info` / `-yuv` | 40 | 38 | 38 | 0 | 2 |
+| `avifpix-gm-info` / `-yuv` | 40 | 26 | 26 | 0 | 14 |
+| `avif` (metadata) | 40 | 26 | 36 | 0 | 4 |
+
+So 6 HEICs and 40 AVIFs were compared: 44 base images and 32 gain maps match libheif and libavif
+sample for sample, in size, chroma format, bit depths and transform list, with 0 mismatches. The
+existing channels did not change (`uhdr-txt`: 70 equal, 7 known, which is 49 plus the 21 new
+files that libultrahdr refuses as not JPEG; XMP: 441 values compared, 441 match, none dropped).
+`oracle planes` also passed its limit, thread and cancel checks on every new file.
+
+Two oracle facts the generated files showed. libavif keeps the `clap`, `irot` and `imir` of a
+`tmap` file on the decoded base image only (`gainMap->image` has none; `read.c` requires the
+gain-map item to carry the same ones), so `avif_oracle.c` writes the base image's transforms into
+`<f>.gm.info`; before that the oracle wrote none and the gain-map `.info` of the three
+`gen_tmap_irot*`/`imir*` files differed from Rust's, which lists the gain-map item's own
+properties. And libavif's JPEG reader finds the gain map of an Ultra HDR JPEG from the `hdrgm`
+XMP, so the libultrahdr build writes XMP too (`UHDR_WRITE_XMP=ON`); without it `avifenc` wrote an
+AVIF with no gain map, which `gen.sh` now rejects (an encoder log with no gain-map line fails the
+file).
+
 ### Never-drop gates
 
 `gainmap` keeps every gain map that a file links to its base image. The run enforces that from
