@@ -29,6 +29,7 @@ if let Some(gm) = &image.gain_map {
 `Planes` keep the coded bit depth and chroma format, the `clap`/`irot`/`imir` list and the `colr`
 properties as stored (not applied: docs/design.md says why), the codec CICP and SEI/OBU metadata.
 For an `iden` item they are the `iden` item's own; the input item's are in `GainMapImage::heif()`.
+Opt in with `gainmap::decode_with` and `DecodeOptions { apply_transforms: true }` to get the planes of HEIC and AVIF pictures with `clap`, `irot` and `imir` applied (through isobmff-rs; `Planes::transforms_applied` says so, the list stays; docs/design.md).
 Cargo features `heif` (HEVC) and `avif` (AV1) are on by default; off, `decode` says `Unsupported`.
 
 ## Resource limits

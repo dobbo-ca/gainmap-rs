@@ -278,9 +278,10 @@ pub struct CodecMetadata {
 }
 
 /// An image decoded by HEVC or AV1: the coded planes at their bit depth and chroma format, with
-/// no colour conversion and no transform applied.
+/// no colour conversion and, unless [`Planes::transforms_applied`], no transform applied.
 ///
-/// The transforms are not applied because their result is not one thing. `libheif` applies each
+/// The transforms are not applied by default because their result is not one thing (see
+/// [`DecodeOptions::apply_transforms`](crate::DecodeOptions::apply_transforms) for the opt-in). `libheif` applies each
 /// `irot`, `imir` and `clap` as it meets it and converts odd geometry to 4:4:4 first, and its
 /// `clap` rounding differs from `libavif` and `isobmff`, which round nothing. [`Planes::transforms`]
 /// lists them in `ipma` order for the caller, who also decides what an inexact `clap` means.
@@ -294,7 +295,7 @@ pub struct Planes {
     pub chroma: Chroma,
     /// The planes: Y, then Cb and Cr unless [`Chroma::Mono`].
     pub planes: Vec<Plane>,
-    /// `clap`, `irot` and `imir` of the decoded item, raw, in `ipma` order, not applied. For an
+    /// `clap`, `irot` and `imir` of the decoded item, raw, in `ipma` order, not applied unless `transforms_applied`. For an
     /// `iden` item these are the `iden` item's own; its input's are in [`GainMapImage::heif`].
     pub transforms: Vec<isobmff::Transform>,
     /// Every `colr` property of the decoded item, raw (an ICC profile is an extent of the input).
@@ -305,6 +306,11 @@ pub struct Planes {
     pub cicp: Option<Cicp>,
     /// The SEI messages (HEVC, of the first tile of a grid) or metadata OBUs (AV1), raw.
     pub metadata: Vec<CodecMetadata>,
+    /// `true` when [`decode_with`](crate::decode_with) ran with
+    /// [`DecodeOptions::apply_transforms`](crate::DecodeOptions::apply_transforms): the planes, `width` and `height` are then the result of
+    /// the transforms (an `iden` input's first, then [`Planes::transforms`]), which stay listed
+    /// as they were. `false` for [`decode`](crate::decode): the planes are raw.
+    pub transforms_applied: bool,
 }
 
 /// A decoded image: 8-bit pixels (JPEG) or coded planes (HEIF and AVIF).

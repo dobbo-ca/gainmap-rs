@@ -2,7 +2,7 @@
 
 ## Crate dependencies
 
-Five direct dependencies, all owner crates, git dependencies pinned by rev in Cargo.toml. `hevc` and `av1` are optional: the Cargo features `heif` and `avif` (both on by default) enable them. All three of isobmff, hevc and av1 use the same isobmff rev, so `&isobmff::Heif` is one type in them (Cargo.lock has one `isobmff`); bump the three pins together or the build fails with a type mismatch.
+Six direct dependency entries (five crates, `isobmff` twice), all owner crates, git dependencies pinned by rev in Cargo.toml. `hevc` and `av1` are optional: the Cargo features `heif` and `avif` (both on by default) enable them. All three of isobmff, hevc and av1 use the same isobmff rev, so `&isobmff::Heif` is one type in them; bump the three pins together or the build fails with a type mismatch. The transform helper (`isobmff_tr`, last row) is the exception, on purpose.
 
 | Crate | Source | Why |
 |---|---|---|
@@ -11,6 +11,7 @@ Five direct dependencies, all owner crates, git dependencies pinned by rev in Ca
 | `isobmff` | `dobbo-ca/isobmff-rs` | HEIF and AVIF boxes: items, `iref`, `altr` groups, `auxC`, item data, and which item is the gain map. The `tmap` payload is read by src/iso.rs, the same parser as for JPEG. |
 | `hevc` (optional, feature `heif`) | `dobbo-ca/hevc-rs` | HEVC intra decode of HEIC items (`decode_heic_item`: one `hvc1` item or a grid) to Y, Cb, Cr planes, bit-exact to libde265, under the remaining `max_alloc`. A decoder here would duplicate a crate we own and fuzz. |
 | `av1` (optional, feature `avif`) | `dobbo-ca/av1-rs` | AV1 intra decode of AVIF items (`decode_avif_item`: `av01`, grid or `iden`) to planes, bit-exact to dav1d, under the remaining `max_alloc` and `max_threads`. |
+| `isobmff_tr` (optional, features `heif` and `avif`; Cargo `package = "isobmff"`) | `dobbo-ca/isobmff-rs` | `apply_transforms`, the shared `clap`/`irot`/`imir` step behind `DecodeOptions::apply_transforms` (src/transforms.rs). A second, newer rev than `isobmff` above, because hevc-rs and av1-rs pin the older one and `&isobmff::Heif` must stay one type for them. The two revs are two types: gainmap converts `Transform`, `Clap` and `Axis` field by field (`transforms::to_tr`) and the helper's `Planes` is built by moving the sample `Vec`s. Cargo.lock has two `isobmff` entries until hevc-rs and av1-rs move to the newer rev; then drop this line and use `isobmff` for both. |
 
 ## Transitive dependencies
 

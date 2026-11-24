@@ -3,7 +3,7 @@
 
 use std::sync::atomic::AtomicBool;
 
-use jpeg::{DecodeOptions, Format, Image};
+use jpeg::{DecodeOptions as JpegOptions, Format, Image};
 
 use crate::budget::Budget;
 #[cfg(any(feature = "heif", feature = "avif"))]
@@ -14,6 +14,23 @@ use crate::{Codec, CodedImage, Decoded, Error, GainMapImage, Limits, Location, P
 /// is lowered to it for those two.
 #[cfg(any(feature = "heif", feature = "avif"))]
 const CODEC_MAX_PIXELS: u64 = 1 << 28;
+
+/// What [`decode_with`] does beyond the raw decode. The default is the raw decode of [`decode`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DecodeOptions {
+    /// Apply the `clap`, `irot` and `imir` transforms to the planes of every HEIC and AVIF picture
+    /// (the base and the gain map), through the `isobmff` transform helper. For an `iden` item
+    /// the input items' transforms run first, innermost first, then the item's own. The planes'
+    /// `width` and `height` become the result's, a 4:2:2 image rotated by 90 or 270 degrees
+    /// becomes [`Chroma::Yuv444`](crate::Chroma::Yuv444), and [`Planes::transforms`](crate::Planes::transforms) still lists the transforms (they
+    /// are never dropped); [`Planes::transforms_applied`](crate::Planes::transforms_applied) says they are applied. The result can
+    /// differ from libheif where it converts the chroma format for odd geometry
+    /// (isobmff-rs docs/transforms.md). JPEG pictures have none of these properties and are
+    /// unaffected. A grid whose tiles have transforms of their own is
+    /// [`Error::Unsupported`]`("grid-tile-transforms")`: the codec assembles the tiles raw.
+    /// Default `false`: the planes are raw.
+    pub apply_transforms: bool,
+}
 
 /// Decodes the base image and the gain map. A JPEG gives [`Picture::Pixels`]: the base as RGBA,
 /// the gain map as gray (1 component) or RGBA (3 components). An HEIC or AVIF image gives
@@ -49,6 +66,27 @@ pub fn decode(
     limits: &Limits,
     cancel: &AtomicBool,
 ) -> Result<Decoded, Error> {
+    decode_with(data, image, &DecodeOptions::default(), limits, cancel)
+}
+
+/// [`decode`] with [`DecodeOptions`]. With the default options it is `decode`. With
+/// [`DecodeOptions::apply_transforms`] each HEIC or AVIF picture's planes go through the
+/// transforms before they are returned ([`Planes::transforms_applied`](crate::Planes::transforms_applied) is then `true`); the
+/// planes are charged to `max_alloc` as before, and the transform buffers are charged on top of
+/// them while they exist (the helper runs under what is left). The extra errors are
+/// [`Error::Unsupported`] (`"grid-tile-transforms"`) and [`Error::Malformed`] (`"clap"`,
+/// `"irot"`) for a transform the helper rejects.
+///
+/// # Errors
+///
+/// As [`decode`].
+pub fn decode_with(
+    data: &[u8],
+    image: &GainMapImage,
+    options: &DecodeOptions,
+    limits: &Limits,
+    cancel: &AtomicBool,
+) -> Result<Decoded, Error> {
     let budget = Budget::new(limits, cancel);
     budget.check_cancel()?;
     let gain = image.gain_map.as_ref().map(|g| &g.image);
@@ -65,10 +103,10 @@ pub fn decode(
             Codec::Av1 => {}
         }
     }
-    let base = decode_one(data, image, &image.base, false, limits, &budget)?;
+    let base = decode_one(data, image, &image.base, false, options, limits, &budget)?;
     budget.check_cancel()?;
     let gain_map = match gain {
-        Some(g) => Some(decode_one(data, image, g, true, limits, &budget)?),
+        Some(g) => Some(decode_one(data, image, g, true, options, limits, &budget)?),
         None => None,
     };
     Ok(Decoded { base, gain_map })
@@ -80,6 +118,7 @@ fn decode_one(
     whole: &GainMapImage,
     img: &CodedImage,
     is_gain_map: bool,
+    options: &DecodeOptions,
     limits: &Limits,
     budget: &Budget<'_>,
 ) -> Result<Picture, Error> {
@@ -93,30 +132,60 @@ fn decode_one(
             decode_jpeg(data, img, format, limits, budget).map(Picture::Pixels)
         }
         #[cfg(feature = "heif")]
-        Codec::Hevc => {
-            let (heif, id, item, cost) = heif_item(whole, img, limits, budget)?;
-            let planes = hevc_planes(data, heif, id, item, limits, budget);
-            budget.release(cost);
-            planes.map(Picture::Planes)
-        }
+        Codec::Hevc => decode_heif_item(whole, img, options, limits, budget, |heif, id, item| {
+            hevc_planes(data, heif, id, item, limits, budget)
+        }),
         #[cfg(not(feature = "heif"))]
         Codec::Hevc => {
-            let _ = whole;
+            let _ = (whole, options);
             Err(Error::Unsupported("hevc decode"))
         }
         #[cfg(feature = "avif")]
-        Codec::Av1 => {
-            let (heif, id, item, cost) = heif_item(whole, img, limits, budget)?;
-            let planes = av1_planes(data, heif, id, item, limits, budget);
-            budget.release(cost);
-            planes.map(Picture::Planes)
-        }
+        Codec::Av1 => decode_heif_item(whole, img, options, limits, budget, |heif, id, item| {
+            av1_planes(data, heif, id, item, limits, budget)
+        }),
         #[cfg(not(feature = "avif"))]
         Codec::Av1 => {
-            let _ = whole;
+            let _ = (whole, options);
             Err(Error::Unsupported("av1 decode"))
         }
     }
+}
+
+/// Decodes a HEIF or AVIF item with `codec` and, when `options` ask for it, applies the
+/// transforms to the planes. The `iden` inputs' transforms and the grid-tile check come first, so
+/// an unsupported grid fails before the codec runs.
+#[cfg(any(feature = "heif", feature = "avif"))]
+fn decode_heif_item(
+    whole: &GainMapImage,
+    img: &CodedImage,
+    options: &DecodeOptions,
+    limits: &Limits,
+    budget: &Budget<'_>,
+    codec: impl FnOnce(&isobmff::Heif, u32, isobmff::Image) -> Result<Planes, Error>,
+) -> Result<Picture, Error> {
+    let (heif, id, item, cost) = heif_item(whole, img, limits, budget)?;
+    let inner = match (options.apply_transforms, &img.location) {
+        (true, Location::Item(outer)) => {
+            crate::transforms::inner_chain(heif, *outer, limits, budget).map(Some)
+        }
+        (true, _) => Err(Error::Malformed("location")),
+        (false, _) => Ok(None),
+    };
+    let inner = match inner {
+        Ok(inner) => inner,
+        Err(e) => {
+            budget.release(cost);
+            return Err(e);
+        }
+    };
+    let planes = codec(heif, id, item);
+    budget.release(cost);
+    let planes = planes.and_then(|p| match inner {
+        Some(chain) => crate::transforms::apply(p, chain, limits, budget),
+        None => Ok(p),
+    });
+    planes.map(Picture::Planes)
 }
 
 /// The graph, the id of the coded or grid item to decode, the parsed item (for its transforms and
@@ -383,6 +452,7 @@ fn finish(
         colour: item.colour,
         cicp,
         metadata,
+        transforms_applied: false,
     })
 }
 
@@ -412,9 +482,9 @@ fn decode_jpeg(
         },
         max_threads: limits.max_threads,
     };
-    let options = DecodeOptions {
+    let options = JpegOptions {
         format,
-        ..DecodeOptions::default()
+        ..JpegOptions::default()
     };
     let decoded = jpeg::decode(bytes, &options, &nested, budget.cancel())?;
     if let Some(e) = decoded.error {
