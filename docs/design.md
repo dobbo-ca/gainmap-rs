@@ -30,6 +30,8 @@ original). The oracles are libultrahdr, libjpeg-turbo, libavif (with dav1d), lib
 pub fn read(data: &[u8], limits: &Limits, cancel: &AtomicBool) -> Result<GainMapImage, Error>;
 pub fn decode(data: &[u8], image: &GainMapImage, limits: &Limits, cancel: &AtomicBool)
     -> Result<Decoded, Error>;
+pub fn decode_with(data: &[u8], image: &GainMapImage, options: &DecodeOptions, limits: &Limits,
+    cancel: &AtomicBool) -> Result<Decoded, Error>;
 ```
 
 `read` decodes nothing. It returns where the coded images are (`CodedImage::location`: a byte
@@ -136,7 +138,29 @@ Each `Planes` lists its `clap`, `irot` and `imir` in `ipma` order and applies no
 3. libavif never applies them, it reports them.
 
 The caller applies them where RGB conversion has already ended bit-exactness, which is the later
-HDR rendering step.
+HDR rendering step, or opts in:
+
+### Opt-in: `decode_with` and `apply_transforms`
+
+`decode` is `decode_with(.., &DecodeOptions::default(), ..)` and stays raw. With
+`DecodeOptions { apply_transforms: true }` each HEIC or AVIF `Planes` (base and gain map) goes
+through `isobmff::apply_transforms` (a second isobmff rev, `isobmff_tr`, docs/dependencies.md),
+which owns the crop rounding (`Clap::crop_rounded`) and the chroma rules (4:2:2 turned 4:4:4 by a 90 or 270
+rotation, chroma kept on odd geometry, so it can differ from libheif there; isobmff-rs docs/transforms.md):
+
+- Order: for an `iden` item the transforms of its inputs, innermost first, then the item's own.
+  The sample `Vec`s are moved into the helper and back, not copied.
+- Metadata rule: `Planes::transforms` is never emptied. `Planes::transforms_applied` is `true`
+  after the step (also when the list was empty), `false` for `decode`. `width` and `height` are
+  the result's. For an `iden` item the inputs' transforms are applied but not listed in the
+  planes (they never were).
+- A grid whose tiles have transforms of their own is `Unsupported("grid-tile-transforms")`: the
+  codec pastes raw tiles, so a tile cannot be transformed first. The check runs before the codec,
+  and only with the option on. The grid item's own transforms are applied.
+- Memory: the helper runs under `Budget::remaining()` (input planes already charged); afterwards
+  the input's charge is replaced by the result's. The helper's errors map to ours (`Alloc` and
+  `Pixels` limits, out of memory, cancel, `Malformed`, `Unsupported`).
+- JPEG pictures are unaffected. Without the Cargo features `heif` and `avif` the code is not built.
 
 ### Which item is the base and which is the gain map
 

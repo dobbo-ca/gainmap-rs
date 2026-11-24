@@ -9,7 +9,7 @@ mod common;
 
 /// `max_alloc` of the call, chosen by the low two bits of the first byte: a tiny one fails inside
 /// the first buffer, the others in the second or not at all. Bit 2 picks 4 threads instead of 1,
-/// so the parallel AV1 grid path runs.
+/// so the parallel AV1 grid path runs. Bit 3 turns on `apply_transforms`.
 const ALLOCS: [usize; 4] = [4 << 10, 64 << 10, 1 << 20, 64 << 20];
 
 // data = [selector byte][file]; `read`, then `decode` under a small `max_alloc`. The buffers of a
@@ -27,7 +27,10 @@ fuzz_target!(|data: &[u8]| {
     let Ok(image) = gainmap::read(file, &lim, &cancel) else {
         return;
     };
-    let Ok(d) = gainmap::decode(file, &image, &lim, &cancel) else {
+    let opts = gainmap::DecodeOptions {
+        apply_transforms: sel & 8 != 0,
+    };
+    let Ok(d) = gainmap::decode_with(file, &image, &opts, &lim, &cancel) else {
         return;
     };
     let mut total = 0usize;

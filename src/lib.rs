@@ -11,7 +11,8 @@
 //! why. [`decode`] decodes the base image and the gain map: a JPEG to RGBA or gray pixels
 //! ([`Picture::Pixels`]), an HEIC (HEVC) or AVIF (AV1) image to its coded Y, Cb and Cr planes
 //! ([`Picture::Planes`]) with the transforms, `colr` properties and codec metadata, raw. It
-//! converts no colour, applies no transform and does not apply the gain map (see
+//! converts no colour, applies no transform (unless [`decode_with`] is given
+//! [`DecodeOptions::apply_transforms`]) and does not apply the gain map (see
 //! docs/design.md). The Cargo features `heif` and `avif` (both on by default) pull in the HEVC and
 //! AV1 decoders; with one off, `decode` gives [`Error::Unsupported`] for that codec.
 //!
@@ -79,10 +80,12 @@ mod heif;
 mod iso;
 mod jpeg;
 mod limits;
+#[cfg(any(feature = "heif", feature = "avif"))]
+mod transforms;
 mod types;
 mod xmp;
 
-pub use decode::decode;
+pub use decode::{DecodeOptions, decode, decode_with};
 pub use error::{Error, Limit};
 pub use iso::{Fraction, IsoChannel, IsoMetadata};
 pub use limits::Limits;
