@@ -10,7 +10,7 @@ hang) and the invariants below. An error may be any variant; the targets do not 
 | Target | Entry point | Checks |
 |---|---|---|
 | `read` | `read` on arbitrary bytes, twice | the two results are equal; a JPEG location is a range inside the input, and `coded_bytes` returns exactly that range; the ISO and XMP metadata conversions can be called |
-| `decode` | `read`, then `decode` | data is `[selector byte][file]`; the selector picks `max_alloc` from 4 KiB, 64 KiB, 1 MiB, 64 MiB; a success has tightly packed buffers of 1 or 4 channels and no more bytes than `max_alloc` together |
+| `decode` | `read`, then `decode_with` | data is `[selector byte][file]`; bits 0-1 of the selector pick `max_alloc` from 4 KiB, 64 KiB, 1 MiB, 64 MiB, bit 2 picks 1 or 4 threads, bit 3 sets `DecodeOptions::apply_transforms`; a success has tightly packed buffers of 1 or 4 channels and no more bytes than `max_alloc` together |
 | `iso` | `IsoMetadata::parse`, then `Metadata::from_iso` | channels 1 and 2 are copies of channel 0 unless the payload is multichannel; the flag accessors can be called |
 | `mpf` | `__fuzz::mpf` on an MPF payload (from the endian field) | at most `max_images` entries |
 | `xmp` | `__fuzz::hdrgm_from_packet` on an XMP packet, then `Metadata::from_xmp` | the tolerant XML reader ends, no panic on bad UTF-8, entities or nesting |

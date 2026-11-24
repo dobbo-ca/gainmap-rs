@@ -211,6 +211,112 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
 
+    type Item<'a> = (u16, &'a [u8; 4], &'a [u8], &'a [u8]);
+
+    fn cat(parts: &[&[u8]]) -> Vec<u8> {
+        parts.concat()
+    }
+
+    fn bx(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        cat(&[&((body.len() + 8) as u32).to_be_bytes(), kind, body])
+    }
+
+    fn fbx(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        bx(kind, &cat(&[&[0; 4], body]))
+    }
+
+    fn ispe(w: u32, h: u32) -> Vec<u8> {
+        fbx(b"ispe", &cat(&[&w.to_be_bytes(), &h.to_be_bytes()]))
+    }
+
+    /// A HEIF file of `(id, type, data, 1-based property indices)` items (the primary item is 1),
+    /// the `ipco` properties and `dimg` references `(from, to)`: `iloc` version 0, one extent each.
+    fn heif_bytes(items: &[Item<'_>], props: &[Vec<u8>], dimg: &[(u16, &[u16])]) -> Vec<u8> {
+        let ftyp = bx(b"ftyp", b"avif\0\0\0\0mif1avif");
+        let meta = |mdat_at: u32| {
+            let mut kids = fbx(b"hdlr", &cat(&[&[0; 4], b"pict", &[0; 13]]));
+            kids.extend(fbx(b"pitm", &1u16.to_be_bytes()));
+            let mut infes = Vec::new();
+            for (id, kind, _, _) in items {
+                let b = cat(&[&id.to_be_bytes(), &[0, 0], *kind, &[0]]);
+                infes.extend(bx(b"infe", &cat(&[&[2, 0, 0, 0], &b])));
+            }
+            kids.extend(fbx(
+                b"iinf",
+                &cat(&[&(items.len() as u16).to_be_bytes(), &infes]),
+            ));
+            let mut iloc = vec![0x44, 0];
+            iloc.extend_from_slice(&(items.len() as u16).to_be_bytes());
+            let mut at = mdat_at;
+            for (id, _, data, _) in items {
+                iloc.extend_from_slice(&id.to_be_bytes());
+                iloc.extend_from_slice(&[0, 0, 0, 1]);
+                iloc.extend_from_slice(&at.to_be_bytes());
+                iloc.extend_from_slice(&(data.len() as u32).to_be_bytes());
+                at += data.len() as u32;
+            }
+            kids.extend(fbx(b"iloc", &iloc));
+            let mut refs = Vec::new();
+            for (from, to) in dimg {
+                let mut b = cat(&[&from.to_be_bytes(), &(to.len() as u16).to_be_bytes()]);
+                for t in *to {
+                    b.extend_from_slice(&t.to_be_bytes());
+                }
+                refs.extend(bx(b"dimg", &b));
+            }
+            kids.extend(fbx(b"iref", &refs));
+            let mut ipma = (items.len() as u32).to_be_bytes().to_vec();
+            for (id, _, _, assoc) in items {
+                ipma.extend_from_slice(&id.to_be_bytes());
+                ipma.push(assoc.len() as u8);
+                // Every association is essential.
+                ipma.extend(assoc.iter().map(|i| 0x80 | i));
+            }
+            let ipco = bx(b"ipco", &props.concat());
+            kids.extend(bx(b"iprp", &cat(&[&ipco, &fbx(b"ipma", &ipma)])));
+            fbx(b"meta", &kids)
+        };
+        let mdat_at = (ftyp.len() + meta(0).len() + 8) as u32;
+        let data: Vec<u8> = items.iter().flat_map(|i| i.2.to_vec()).collect();
+        cat(&[&ftyp, &meta(mdat_at), &bx(b"mdat", &data)])
+    }
+
+    #[test]
+    fn inner_chain_is_innermost_first_and_grid_tiles_add_nothing() {
+        use isobmff_tr::Transform::Rotate;
+        let limits = Limits::default();
+        let cancel = AtomicBool::new(false);
+        let budget = Budget::new(&limits, &cancel);
+        // `irot` 1, 2 and 3 are rotations by 90, 180 and 270 degrees.
+        let props = [
+            ispe(64, 48),
+            bx(b"av1C", &[0x81, 0x0c, 0x4c, 0x00, 0x0a, 0x00]),
+            bx(b"irot", &[1]),
+            bx(b"irot", &[2]),
+            bx(b"irot", &[3]),
+        ];
+        // iden 3 [irot 270] -> iden 2 [irot 180] -> av01 1 [irot 90]; grid 5 [irot 180] of tile 4.
+        let grid = [0u8, 0, 0, 0, 0, 64, 0, 48];
+        let items: [Item<'_>; 5] = [
+            (1, b"av01", &[1; 4], &[1, 2, 3]),
+            (2, b"iden", &[], &[1, 4]),
+            (3, b"iden", &[], &[1, 5]),
+            (4, b"av01", &[4; 4], &[1, 2]),
+            (5, b"grid", &grid, &[1, 4]),
+        ];
+        let file = heif_bytes(&items, &props, &[(2, &[1]), (3, &[2]), (5, &[4])]);
+        let heif = isobmff::parse(&file, &isobmff::Limits::default(), &cancel).unwrap();
+
+        // The item's own list (270) is not in the chain: `apply` adds it last.
+        let chain = inner_chain(&heif, 3, &limits, &budget).unwrap();
+        assert_eq!(chain, [Rotate(90), Rotate(180)]);
+        assert_eq!(limits.max_alloc - budget.remaining(), 2 * TR_SIZE);
+        // Not an `iden`: nothing.
+        assert!(inner_chain(&heif, 1, &limits, &budget).unwrap().is_empty());
+        // A grid whose tile has no transforms of its own: nothing (its own list is `apply`'s).
+        assert!(inner_chain(&heif, 5, &limits, &budget).unwrap().is_empty());
+    }
+
     #[test]
     fn transforms_convert_field_by_field() {
         let c = isobmff::Clap {
@@ -305,6 +411,8 @@ mod tests {
         let limits = Limits::default();
         let cancel = AtomicBool::new(false);
         let budget = Budget::new(&limits, &cancel);
+        // As in `decode`, the input planes are charged before the step.
+        budget.charge(plane_bytes(&raw.planes)).unwrap();
         let out = apply(raw.clone(), Vec::new(), &limits, &budget).unwrap();
 
         // The same call on the helper's types.
@@ -364,6 +472,9 @@ mod tests {
         // Mirror (inner), then the item's own rotate 90: the reverse order gives [7, 3, 6, 2, 5, 1, 4, 0].
         let inner = vec![isobmff_tr::Transform::Mirror(isobmff_tr::Axis::LeftRight)];
         budget.charge(TR_SIZE).unwrap();
+        budget
+            .charge(plane_bytes(&planes_422(Vec::new()).planes))
+            .unwrap();
         let out = apply(
             planes_422(vec![isobmff::Transform::Rotate(90)]),
             inner,
@@ -378,12 +489,16 @@ mod tests {
         assert_eq!(out.chroma, Chroma::Yuv444);
         assert_eq!((out.width, out.height), (2, 4));
 
-        // The chain fits but the helper gets 39 bytes and needs 8 + 16 + 16: a limit error, not a panic.
+        // The input (24 bytes, charged) and the chain fit but the helper gets 39 bytes and needs 8 + 16 + 16:
+        // a limit error, not a panic.
         let small = Limits {
-            max_alloc: TR_SIZE + 39,
+            max_alloc: TR_SIZE + 24 + 39,
             ..Limits::default()
         };
         let budget = Budget::new(&small, &cancel);
+        budget
+            .charge(plane_bytes(&planes_422(Vec::new()).planes))
+            .unwrap();
         let e = apply(
             planes_422(vec![isobmff::Transform::Rotate(90)]),
             Vec::new(),

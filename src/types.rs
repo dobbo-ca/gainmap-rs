@@ -283,8 +283,9 @@ pub struct CodecMetadata {
 /// The transforms are not applied by default because their result is not one thing (see
 /// [`DecodeOptions::apply_transforms`](crate::DecodeOptions::apply_transforms) for the opt-in). `libheif` applies each
 /// `irot`, `imir` and `clap` as it meets it and converts odd geometry to 4:4:4 first, and its
-/// `clap` rounding differs from `libavif` and `isobmff`, which round nothing. [`Planes::transforms`]
-/// lists them in `ipma` order for the caller, who also decides what an inexact `clap` means.
+/// `clap` rounding differs from `libavif` and the `isobmff` `Clap::crop`, which round nothing; the opt-in
+/// uses the libheif rounding (`Clap::crop_rounded`). [`Planes::transforms`]
+/// lists them in `ipma` order for the caller, who otherwise decides what an inexact `clap` means.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Planes {
     /// Luma width (a grid is assembled and cropped to its output size).
