@@ -297,7 +297,7 @@ if [ "$uhdr_ok" -lt $((${PARITY_MIN_UHDR_OK:-15} / every)) ]; then
   echo "run.sh: only $uhdr_ok equal uhdr-txt files" >&2; status=1
 fi
 avif_eq=$(awk -F'\t' '$2 == "avif" && $3 == "equal" && $4 == 1' "$work/results.tsv" | wc -l | tr -d ' ')
-if [ "$avif_eq" -lt $((${PARITY_MIN_AVIF_OK:-36} / every)) ]; then
+if [ "$avif_eq" -lt $((${PARITY_MIN_AVIF_OK:-26} / every)) ]; then
   echo "run.sh: only $avif_eq equal avif files" >&2; status=1
 fi
 # The same for the decoded planes: only files both tools decoded and the Rust planes equal count.

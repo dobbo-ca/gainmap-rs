@@ -109,7 +109,7 @@ SHA-256, size and "same bytes" for each. A file listed in `tests/parity/gen-pins
 that SHA-256, or `gen.sh` fails. All 21 are pinned. Sixteen (the 13 AVIFs made from the seine inputs
 and 3 of the HEICs) gave the same bytes in runs 45295848457 and 45297466465; the other 5 (the 4
 `gen_tmap_ds*` and `gen_uhdr_p010_pq_bt2100.heic`) changed when `UHDR_WRITE_XMP=ON` was added, and
-agree between run 45297466465 and the run of the pull request that added the pins. Every file was
+agree between run 45297466465 and run 45299063870. Every file was
 also the same on the two runs inside each parity run. A new generator version means new pins.
 
 Tools, each pinned by tag and commit in `.github/ci/build-gen-avif.sh` and `build-gen-heic.sh`,
