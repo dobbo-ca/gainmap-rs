@@ -9,7 +9,7 @@ parity oracle writes it) is `limit-<field>`.
 |---|---|---|---|---|---|
 | `max_alloc` | 1 GiB | bytes, peak | `Alloc` | `limit-alloc` | `Budget::charge`, before each allocation sized from input; nested crates get the rest |
 | `max_threads` | `available_parallelism()` (1 if unknown) | threads | none | none | passed to `jpeg` and `av1` by `decode` (`hevc` is serial); see threading.md |
-| `max_pixels` | 2^30 | pixels per image | `Pixels` | `limit-pixels` | `read` for JPEG (the SOF of the base and of the chosen gain map, src/jpeg/mod.rs), `jpeg` in `decode` (from the SOF, before any allocation) and `isobmff` (`ispe`) |
+| `max_pixels` | 2^30 | pixels per image | `Pixels` | `limit-pixels` | `read` for JPEG (the SOF of the base and of the chosen gain map, src/jpeg/mod.rs), `jpeg` in `decode` (from the SOF, before any allocation) and `isobmff` (`ispe`); with `apply_transforms`, the transform helper checks the output size |
 | `max_xmp_bytes` | 16 MiB | bytes | `XmpBytes` | `limit-xmp-bytes` | `exif::Xmp::parse`; the size of a HEIF XMP item before it is read. exif's own XML node limit is reported as this error too |
 | `max_segments` | 100 000 | JPEG markers outside entropy data, per image | `Segments` | `limit-segments` | src/jpeg/scan.rs, per segment, TEM or RST marker and fill byte (restart markers inside entropy data are not counted) |
 | `max_images` | 64 | MPF entries; candidate images; HEIF `tmap` items that link an image and `altr` groups that hold it | `Images` | `limit-images` | src/jpeg/mpf.rs from the entry count, before the entries are read; the candidate list; src/heif.rs before each `Heif::image` call (one pass over the references and groups, cancel checked every 1024 steps), because `isobmff` looks for a gain map in time proportional to their product |
@@ -18,7 +18,7 @@ The other errors are not limits: `UnknownFormat`, `Truncated`, `Malformed(token)
 `Unsupported(token)`, `OutOfMemory` (the allocator refused a size within the limits), `Cancelled`,
 and the errors of the nested crates (`Jpeg`, `Heif`, `Hevc`, `Av1`). The limit, out-of-memory and cancel errors of
 `jpeg`, `isobmff`, `hevc` and `av1` are mapped to ours (`AllocLimit` and `Limit::Alloc` to `Alloc`, `PixelLimit`
-and `Limit::Pixels` to `Pixels`; the `WidthLimit` and `HeightLimit` of `hevc` and `av1` to `Pixels`, and the `MetadataLimit` of `av1`, which is carved out of `max_alloc`, to `Alloc`). Other `isobmff` limits (items, boxes, ...) stay `Error::Heif`.
+and `Limit::Pixels` to `Pixels`; the `WidthLimit` and `HeightLimit` of `hevc` and `av1` to `Pixels`, and the `MetadataLimit` of `av1`, which is carved out of `max_alloc`, to `Alloc`). Other `isobmff` limits (items, boxes, ...) stay `Error::Heif`; the transform helper's other limits are `Malformed("transform")`.
 
 ## max_alloc and the budget
 
@@ -77,6 +77,13 @@ therefore the enforced peak for every value, the 1 GiB default included.
 - **Threads.** `max_threads` goes to `av1` (grid tiles decode on up to that many workers, and
   each worker gets its share); `hevc` is serial. The result does not depend on it (checked for 1,
   2 and 3 on the corpus).
+- **Transforms (`decode_with`, `apply_transforms`).** The chain of transforms (`inner_chain` and
+  the item's own, `len * size_of::<Transform>()`) is charged and released when the step ends. The
+  helper gets `Budget::remaining()` as its `max_alloc`, with the input planes still charged, and
+  `max_pixels` and `max_threads` as they are. Afterwards the input's charge is released and the
+  result's is charged (the helper ran under what was left, so it fits). A `LimitExceeded(Alloc)`
+  or `LimitExceeded(Pixels)` of the helper is ours; its other errors are `Malformed(token)` or
+  `Unsupported(token)`, or `Malformed("transform")` for a limit we do not map.
 - **Cancel.** Checked before the base, between the two decodes and by the codecs inside.
 
 ## Cancel

@@ -157,6 +157,9 @@ rotation, chroma kept on odd geometry, so it can differ from libheif there; isob
 - A grid whose tiles have transforms of their own is `Unsupported("grid-tile-transforms")`: the
   codec pastes raw tiles, so a tile cannot be transformed first. The check runs before the codec,
   and only with the option on. The grid item's own transforms are applied.
+- The `tmap` item's own `clap`, `irot` and `imir` are not applied: they belong to the combined HDR
+  rendition. The base and the gain map each get their own item's transforms only. Read them from
+  `GainMapImage::heif()`: `Heif::image` of the `tmap` item (`item_type` `tmap`) has them.
 - Memory: the helper runs under `Budget::remaining()` (input planes already charged); afterwards
   the input's charge is replaced by the result's. The helper's errors map to ours (`Alloc` and
   `Pixels` limits, out of memory, cancel, `Malformed`, `Unsupported`).

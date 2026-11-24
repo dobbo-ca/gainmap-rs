@@ -28,6 +28,9 @@ pub struct DecodeOptions {
     /// (isobmff-rs docs/transforms.md). JPEG pictures have none of these properties and are
     /// unaffected. A grid whose tiles have transforms of their own is
     /// [`Error::Unsupported`]`("grid-tile-transforms")`: the codec assembles the tiles raw.
+    /// The `tmap` item's own `clap`, `irot` and `imir` (the transforms of the HDR rendition) are
+    /// not applied: the base and the gain map get their own item's only; read them from
+    /// [`GainMapImage::heif`](crate::GainMapImage::heif) (`Heif::image` of the `tmap` item).
     /// Default `false`: the planes are raw.
     pub apply_transforms: bool,
 }
