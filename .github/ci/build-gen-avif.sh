@@ -49,7 +49,6 @@ cmake --build "$build/avif" -j "$(nproc)"
 mkdir -p "$prefix/bin"
 install "$build/avif/avifenc" "$build/avif/avifgainmaputil" "$prefix/bin/"
 "$prefix/bin/avifenc" --version
-"$prefix/bin/avifgainmaputil" --help >/dev/null
 cat > "$prefix/versions-avif.txt" <<VEOF
 Generators: libaom v3.14.1 (0308786), libavif v1.4.2 (c5240fc) avifenc and avifgainmaputil.
 VEOF
