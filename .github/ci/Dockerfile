@@ -148,7 +148,8 @@ RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
     && sh tests/parity/gen.sh /corpus \
     && cargo build --locked --release --example oracle \
     && { sh tests/parity/run.sh /corpus target/release/examples/oracle /report; st=$?; \
-         mkdir -p /report; [ -s /report/status ] || echo $st > /report/status; }
+         mkdir -p /report; [ -s /report/status ] || echo $st > /report/status; \
+         GAINMAP_PARITY_DIR=/corpus cargo test --locked --release --test resources heif > /report/resources-heif.txt 2>&1 || echo 1 > /report/status; }
 
 # The report as build output: docker/build-push-action with `outputs: type=local,dest=parity-out`.
 FROM scratch AS parity-report
@@ -184,7 +185,8 @@ COPY --from=deps /usr/local/cargo/git /usr/local/cargo/git
 ENV CARGO_NET_OFFLINE=true
 COPY . .
 RUN cargo +nightly fuzz build --fuzz-dir tests/fuzz
-RUN sh tests/fuzz/make-seeds.sh /seeds && find /seeds -type f | wc -l
+RUN --mount=type=cache,id=gainmap-corpus,target=/corpus,sharing=locked \
+    sh tests/parity/fetch.sh /corpus && sh tests/fuzz/make-seeds.sh /seeds /corpus && find /seeds -type f | wc -l
 
 # Benchmark (bench.yml): libultrahdr + libjpeg-turbo and the Rust bench example over the same
 # files in one image; tests/parity/bench.sh writes /report/bench.md. Information only. The
