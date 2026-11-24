@@ -50,6 +50,8 @@ make() {
       return 0
     fi
   done
+  # An AVIF whose encoder log has no gain-map line was written without one: a generator mistake, not a corpus file.
+  case $name in *.avif) grep -q "^ \* Gain map " "$tmp/log" || { cat "$tmp/log" >&2; echo "gen.sh: $name has no gain map" >&2; failed=$((failed + 1)); return 0; } ;; esac
   if cmp -s "$tmp/1/$name" "$tmp/2/$name"; then det=yes; else det=no; fi
   sha=$(sha256sum "$tmp/1/$name" | cut -d' ' -f1)
   size=$(wc -c < "$tmp/1/$name" | tr -d ' ')

@@ -23,10 +23,10 @@ git init -q "$src/libultrahdr"
   git checkout -q v2.0.2
 )
 
-# libuhdr is shared here (the default), so the sample app links it dynamically; libheif is static inside
+# UHDR_WRITE_XMP=ON: the JPEGs also carry the hdrgm XMP (libavif needs it to read the gain map of a JPEG). libuhdr is shared here (the default), so the sample app links it dynamically; libheif is static inside
 # it, and x265 is added to the link line by hand (libultrahdr's imported libheif target does not carry it).
 cmake -S "$src/libultrahdr" -B "$build/uhdr" -DCMAKE_BUILD_TYPE=Release \
-  -DUHDR_BUILD_DEPS=ON -DUHDR_ENABLE_HEIF=ON -DUHDR_BUILD_EXAMPLES=ON -DUHDR_BUILD_TESTS=OFF -DUHDR_ENABLE_INSTALL=OFF \
+  -DUHDR_BUILD_DEPS=ON -DUHDR_WRITE_XMP=ON -DUHDR_ENABLE_HEIF=ON -DUHDR_BUILD_EXAMPLES=ON -DUHDR_BUILD_TESTS=OFF -DUHDR_ENABLE_INSTALL=OFF \
   -DCMAKE_CXX_STANDARD_LIBRARIES="-lx265 -ldl"
 cmake --build "$build/uhdr" -j "$(nproc)"
 install "$build/uhdr/ultrahdr_app" "$prefix/bin/"
