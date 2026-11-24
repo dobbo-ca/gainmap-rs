@@ -30,7 +30,11 @@ for f in "$jpg" "$hdr"; do [ -f "$f" ] || { echo "gen.sh: missing input $f" >&2;
 # The generators write to $OUT. enc: avifenc on the JPEG (it converts the JPEG's gain map to a tmap
 # item); comb: avifgainmaputil combine <base> <alternate>; uhdr: the libultrahdr sample app, HEIC out.
 enc() { "$gen/bin/avifenc" -s 6 -j 1 "$@" "$jpg" "$OUT"; }
-comb() { "$gen/bin/avifgainmaputil" combine -s 6 -j 1 "$@" "$OUT"; }
+# --ignore-profile: libavif cannot compute a gain map for an image with an ICC profile.
+comb() { "$gen/bin/avifgainmaputil" combine -s 6 -j 1 --ignore-profile "$@" "$OUT"; }
+# encd: avifenc on an Ultra HDR JPEG made by libultrahdr with a gain map of half the size ($tmp/ds.jpg). libavif writes a clap
+# on a tmap image only when the gain map is not the size of the base (write.c, AVIF_RESULT_NOT_IMPLEMENTED otherwise).
+encd() { "$gen/bin/avifenc" -s 6 -j 1 "$@" "$tmp/ds.jpg" "$OUT"; }
 uhdr() { "$gen/bin/ultrahdr_app" -m 0 -p "$p010" -w 1280 -h 720 -a 0 "$@" -z "$OUT"; }
 
 # make <name> <generator> <args...>: runs the generator twice, keeps the first output.
@@ -40,7 +44,7 @@ make() {
     OUT="$tmp/$i/$name"
     rm -f "$OUT"
     if ! "$@" > "$tmp/log" 2>&1 || [ ! -s "$OUT" ]; then
-      tail -n 20 "$tmp/log" >&2
+      tail -n 60 "$tmp/log" >&2
       echo "gen.sh: $name failed" >&2
       failed=$((failed + 1))
       return 0
@@ -62,12 +66,18 @@ make() {
   echo "generated $name sha256=$sha size=$size deterministic=$det"
 }
 
-# AVIF tmap with the transform properties on the base image and the gain map (clap only when both are the same size).
+# AVIF tmap with irot and imir on the base image and the gain map (same size as the base).
 make gen_tmap_irot1.avif enc --irot 1
 make gen_tmap_irot3_imir1.avif enc --irot 3 --imir 1
 make gen_tmap_imir0.avif enc --imir 0
-make gen_tmap_clap.avif enc --crop 8,8,384,284
-make gen_tmap_irot1_imir0_clap.avif enc --irot 1 --imir 0 --crop 8,8,384,284
+# Transform properties with a gain map of half the size: the JPEG is made by libultrahdr (the HEIC generator), then avifenc converts it.
+if [ -x "$gen/bin/ultrahdr_app" ]; then
+  OUT=$tmp/ds.jpg; uhdr -s 2 > "$tmp/log" 2>&1 || { cat "$tmp/log" >&2; echo "gen.sh: the half-size gain-map JPEG failed" >&2; exit 1; }
+  make gen_tmap_ds.avif encd
+  make gen_tmap_ds_clap.avif encd --crop 8,8,1264,704
+  make gen_tmap_ds_irot2_clap.avif encd --irot 2 --crop 8,8,1264,704
+  make gen_tmap_ds_irot1_imir0_clap.avif encd --irot 1 --imir 0 --crop 8,8,1264,704
+fi
 # Gain-map shape: pixel format, bit depth, size, grid (base 8-bit 4:4:4 or 4:2:0 from the JPEG, alternate the HDR AVIF).
 make gen_gm_yuv400.avif comb --yuv-gain-map 400 "$jpg" "$hdr"
 make gen_gm_depth10.avif comb --depth-gain-map 10 "$jpg" "$hdr"
