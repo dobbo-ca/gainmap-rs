@@ -7,8 +7,9 @@ use gainmap::{Limits, Picture, Samples};
 #[path = "../common.rs"]
 mod common;
 
-/// `max_alloc` of the call, chosen by the first byte: a tiny one fails inside the first buffer,
-/// the others in the second or not at all.
+/// `max_alloc` of the call, chosen by the low two bits of the first byte: a tiny one fails inside
+/// the first buffer, the others in the second or not at all. Bit 2 picks 4 threads instead of 1,
+/// so the parallel AV1 grid path runs.
 const ALLOCS: [usize; 4] = [4 << 10, 64 << 10, 1 << 20, 64 << 20];
 
 // data = [selector byte][file]; `read`, then `decode` under a small `max_alloc`. The buffers of a
@@ -19,6 +20,7 @@ fuzz_target!(|data: &[u8]| {
     };
     let lim = Limits {
         max_alloc: ALLOCS[usize::from(sel & 3)],
+        max_threads: if sel & 4 == 0 { 1 } else { 4 },
         ..common::small_limits()
     };
     let cancel = AtomicBool::new(false);

@@ -14,7 +14,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 jobs:
-  # No fuzz-arm64 job: this crate has no SIMD kernel (the kernels are jpeg-rs's and are fuzzed in its CI),
+  # No fuzz-arm64 job: this crate has no SIMD kernel (the kernels are jpeg-rs's and av1-rs's and are fuzzed in their CI),
   # so the code is the same on both architectures.
   fuzz:
     runs-on: github-arc-runner-set

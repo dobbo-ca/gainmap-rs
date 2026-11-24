@@ -5,7 +5,8 @@
 #   read    Ultra HDR JPEGs (MPF, GContainer only, "image that follows", XMP Seq, ISO only,
 #           truncated), a JPEG without a gain map, an AVIF with a tmap item (and one with an XMP
 #           item too), a HEIC with an Apple auxiliary gain map and two XMP items
-#   decode  [selector byte][file]: the same files, selector 0 (tiny max_alloc) and 3 (64 MiB)
+#   decode  [selector byte][file]: the same files, selector 0 (tiny max_alloc) and 3 (64 MiB);
+#           7 (64 MiB, 4 threads) for the corpus files
 #   iso     ISO 21496-1 payloads: one channel, three channels, common denominator, truncated
 #   mpf     MPF payloads from the endian field: big and little endian, truncated
 #   xmp     XMP packets: hdrgm attributes, hdrgm rdf:Seq, Apple HDRGainMap, garbage
@@ -206,6 +207,7 @@ if [ -n "${2:-}" ]; then
     if [ -f "$2/files/$f" ] && [ -e "$2/files/$f.ok" ]; then
       cp "$2/files/$f" "$out/read/$f"
       { bytes 3; cat "$2/files/$f"; } > "$out/decode/3-$f"
+      { bytes 7; cat "$2/files/$f"; } > "$out/decode/7-$f"
     fi
   done
 fi

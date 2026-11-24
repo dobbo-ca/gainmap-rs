@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "av1"
 version = "0.1.0"
-source = "git+https://github.com/dobbo-ca/av1-rs?rev=138e7ecd12e178b3da5ccf7dc678cda7d8d7bfb3#138e7ecd12e178b3da5ccf7dc678cda7d8d7bfb3"
+source = "git+https://github.com/dobbo-ca/av1-rs?rev=68e575a37b4d0de82c9212ee6503853f11deba45#68e575a37b4d0de82c9212ee6503853f11deba45"
 dependencies = [
  "isobmff",
 ]

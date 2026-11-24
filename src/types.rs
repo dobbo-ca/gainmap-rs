@@ -294,9 +294,11 @@ pub struct Planes {
     pub chroma: Chroma,
     /// The planes: Y, then Cb and Cr unless [`Chroma::Mono`].
     pub planes: Vec<Plane>,
-    /// `clap`, `irot` and `imir` of the decoded item, raw, in `ipma` order, not applied.
+    /// `clap`, `irot` and `imir` of the decoded item, raw, in `ipma` order, not applied. For an
+    /// `iden` item these are the `iden` item's own; its input's are in [`GainMapImage::heif`].
     pub transforms: Vec<isobmff::Transform>,
     /// Every `colr` property of the decoded item, raw (an ICC profile is an extent of the input).
+    /// For an `iden` item, the `iden` item's own.
     pub colour: Vec<isobmff::Colour>,
     /// The colour description of the bitstream: the HEVC VUI (`None` when the SPS has none) or
     /// the AV1 `color_config`.

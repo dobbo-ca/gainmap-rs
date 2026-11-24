@@ -32,7 +32,7 @@ COPY . .
 # reused as this one's, so every RUN that runs cargo touches the sources just before it starts,
 # and holds the cache with sharing=locked, so a concurrent build of another commit cannot build
 # into it between the touch and cargo. No SIMD here, so there is no scalar-tier run: this crate has
-# no kernel and forbids unsafe code; the SIMD kernels, and their scalar tier, are jpeg-rs's, and
+# no kernel and forbids unsafe code; the SIMD kernels, and their scalar tier, are jpeg-rs's and av1-rs's (AV1_SIMD), and
 # its own CI runs them both ways.
 FROM src AS ci
 RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
@@ -72,8 +72,8 @@ ENV CARGO_NET_OFFLINE=true
 COPY . .
 
 # The whole suite runs on aarch64 under qemu-user, released: the crate is small and has no SIMD of
-# its own, so there are no kernel-only tests to select. What the target changes is jpeg-rs's NEON
-# kernels, which every decode of the tests runs.
+# its own, so there are no kernel-only tests to select. What the target changes is the NEON
+# kernels of jpeg-rs and av1-rs (loop filter), which every decode of the tests runs.
 FROM qemu-arm64 AS arm64
 RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
     find src examples tests -name '*.rs' -exec touch {} + && cargo test --locked --release --target aarch64-unknown-linux-gnu

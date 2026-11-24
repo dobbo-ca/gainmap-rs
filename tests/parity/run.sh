@@ -187,6 +187,13 @@ for f in $(ls "$work/in"); do
       # The decoded planes. `oracle planes` also runs its own limit, thread and cancel checks on
       # every image it decodes: a failed check is a non-zero exit.
       timeout 900 "$oracle" planes "$one" "$op" || fail "$f" planes-rust "exit $?"
+      # An image that `read` reported and `decode` failed on leaves <f>.<which>.err. Most have no
+      # C oracle (libavif decodes no Adobe auxiliary gain map, libheif no tmap one), so nothing else
+      # would notice: a gain map that gainmap keeps must decode.
+      for e in "$op"/*.err; do
+        [ -e "$e" ] || continue
+        fail "$f" planes-rust-err "$(basename "$e"): $(head -n 1 "$e")"
+      done
       # libavif refuses a HEIC (no 'avif' brand), so a HEIC has no libavif metadata channel. It is
       # gated by compare.py instead: Rust must report a gain map, and its XMP values and
       # sizes are compared with ExifTool. Its planes are compared with libheif, which decodes
@@ -283,7 +290,7 @@ BEGIN {
   base = ch; sub(/-.*/, "", base)
   part = ch; sub(/-[^-]*$/, "", part)
   if ((f SUBSEP ch) in k && (ch != "avif" || want[f SUBSEP ch] == $5)) { kn[ch]++; used[f SUBSEP ch] = 1 }
-  else if (index(ch, "-") && (f SUBSEP part) in k) { kn[ch]++; used[f SUBSEP part] = 1 }
+  else if (index(ch, "-") && (f SUBSEP part) in k && (part !~ /^avifpix-/ || res == "only-rust")) { kn[ch]++; used[f SUBSEP part] = 1 }
   else if (index(ch, "-") && (f SUBSEP base) in k) { kn[ch]++; used[f SUBSEP base] = 1 }
   else { df[ch]++; nd++; print f "\t" ch "\t" res > diffs }
 }

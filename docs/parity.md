@@ -172,7 +172,8 @@ over the `<f>.gm.jpg` files that `oracle uhdr` wrote (the gain-map image), and
 `tests/parity/compare.py` compares the values. Only number formatting is normalised (`1.0` and
 `1`; a list of one value and the value; `True` and `true`). The GContainer directory is not in
 the public API, so its values are not compared; ExifTool's view of it is used only for the
-gain-map gate below. If a tag name of ExifTool differs from the one here
+gain-map gate below. For an AVIF with an Adobe auxiliary gain map the `hdrgm` XMP is read from
+the file by ExifTool and compared with the same values. If a tag name of ExifTool differs from the one here
 (`HDRGainMapVersion`, `HDRGainMapHeadroom`), the first run shows it in `xmp-mismatches.tsv`.
 
 ### `gen`
@@ -194,7 +195,11 @@ whatever else the shared cache holds, and `fetch.sh` checks size and SHA-256 of 
 on every run. Channels: `uhdr-txt` (the status line and the metadata lines), `uhdr-dims` (the
 base and gain-map sizes and the channel count, lines 2 to 6; compared only when libultrahdr read
 the file), `uhdr-base-jpg`, `uhdr-gm-jpg`, `uhdr-base-rgba`, `uhdr-gm-raw`, `avif`,
-`turbo-base-rgba`, `turbo-gm-raw`, `base-prefix`, `base-size`, `exiftool-mpimage2`, `xmp` and the eight pixel channels `heifpix-*` and `avifpix-*` (see `planes`).
+`turbo-base-rgba`, `turbo-gm-raw`, `base-prefix`, `base-size`, `exiftool-mpimage2`, `heifid`, `xmp` and the eight pixel channels `heifpix-*` and `avifpix-*` (see `planes`).
+A Rust `<f>.<which>.err` from `oracle planes` (an image that `read` reported and `decode` failed
+on) is a failure (`planes-rust-err` in `failures.tsv`), so the images that no C tool decodes (the
+Adobe auxiliary gain maps and the other libavif refusals) are gated too; and a known
+`avifpix-*` line only covers a result of `only-rust`.
 The report (`summary.md`) has, per channel, the counts inputs, ok (the C tool produced it), equal, differ, known and n/a. It also
 has the Rust status of every input and the sweep result.
 
@@ -319,7 +324,9 @@ special case. The counts of that run:
 So 6 HEICs and 40 AVIFs were compared: 44 base images and 32 gain maps match libheif and libavif
 sample for sample, in size, chroma format, bit depths and transform list, with 0 mismatches. The
 existing channels did not change (`uhdr-txt`: 70 equal, 7 known, which is 49 plus the 21 new
-files that libultrahdr refuses as not JPEG; XMP: 441 values compared, 441 match, none dropped).
+files that libultrahdr refuses as not JPEG; XMP: 441 values compared, 441 match, none dropped. The run of main after PR 5 (45308886373),
+which added an ExifTool `hdrgm` compare for the Adobe auxiliary XMP of the AVIF files and the
+`heifid` channel, has XMP: 505 values compared, 505 match, and `heifid`: 1 file, equal).
 `oracle planes` also passed its limit, thread and cancel checks on every new file.
 
 Two oracle facts the generated files showed. libavif keeps the `clap`, `irot` and `imir` of a
