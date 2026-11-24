@@ -119,7 +119,7 @@ built in their own Dockerfile stages, CI-only, never a dependency of a crate:
 |---|---|---|---|
 | libaom (the AV1 encoder) | v3.14.1 `03087864cf4b` | BSD-2-Clause and the AOM patent licence | |
 | libavif `avifenc`, `avifgainmaputil combine` | v1.4.2 `c5240fc79fe5` | BSD-2-Clause | the AVIFs |
-| libultrahdr `ultrahdr_app` (`UHDR_WRITE_XMP=ON`) | v2.0.2 `e5f5a022fe96` | Apache-2.0 | the HEICs and one JPEG |
+| libultrahdr `ultrahdr_app` (`UHDR_WRITE_XMP=ON`) | v2.0.2 `e5f5a022fe96` | MIT OR Apache-2.0 (and the adobe-hdr-gain-map-license NOTICE) | the HEICs and one JPEG |
 | libheif `4a3f74bc` with libultrahdr's `libheif_pr1503.patch` (`tmap` writing, open libheif PR 1503) | fetched by libultrahdr's build | LGPL-3.0 | inside `ultrahdr_app` |
 | x265 (the HEVC encoder), Debian bookworm 3.5 | | GPL-2.0-or-later | inside `ultrahdr_app` |
 | libjpeg-turbo (libultrahdr's own build), libjpeg, libpng, libxml2, zlib (Debian bookworm) | | BSD-3-Clause, IJG, zlib, MIT | the JPEG and PNG readers of the apps |
@@ -147,8 +147,8 @@ Still not covered, because no tool in the CI image writes it: a HEIC with `irot`
 base or a 10-bit base (`ultrahdr_app` has no option for them, and its libheif patch encodes one
 8-bit image per item; a C driver against the patched libheif would be the way, not built), a HEIC
 grid gain map (libheif PR 1503 takes one image), and an iOS 18 HEIC (Apple `auxl` gain map plus a
-`tmap`; no licensed sample). `parity-arm64` does not run `gen.sh` (its image has no generators);
-it reads the generated files only when the shared corpus cache holds those of an earlier parity run.
+`tmap`; no licensed sample). `parity-arm64` and `bench` do not run `gen.sh` (their images have no generators)
+and `inputs.sh` ignores `gen.names` for them, so their inputs depend on the commit and not on the shared cache.
 
 ## Attribution
 
@@ -161,6 +161,7 @@ it reads the generated files only when the shared corpus cache holds those of an
 - libavif test data: Copyright the libavif authors, BSD-2-Clause.
 - johncf/apple-hdr-heic: MIT.
 - libultrahdr test fixture `gainmap_hevc_16x16.heic`: Apache-2.0 OR MIT (the libultrahdr authors); unchanged.
+- libultrahdr `tests/data/raw_p010_image.p010` (commit e5f5a02), CC BY 4.0, the libultrahdr authors: encoded into the `gen_uhdr_*` and `gen_tmap_ds*` files, which are made in CI and not kept.
 
 ## Excluded
 

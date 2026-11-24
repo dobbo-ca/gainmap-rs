@@ -51,6 +51,9 @@ Details: [docs/limits.md](docs/limits.md).
   jpeg-rs and av1-rs (hevc-rs is serial).
 - Set the cancel flag from another thread: the call returns `Error::Cancelled`.
 - A gain map is never dropped: bad metadata gives `metadata: None` and the reason in `issues`.
+- Deviation from the keep-metadata-with-a-drop-option rule: `decode` has no option to drop the SEI,
+  metadata OBUs and `colr` data it returns (and charges to `max_alloc`); it keeps them, so nothing
+  is lost. `hevc` drops SEI past 1 MiB per picture without an error.
 
 HEVC is covered by patent pools; AV1 is royalty-free. Low risk for a private app; review before
 anything public.

@@ -47,6 +47,11 @@ RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
     find src examples tests -name '*.rs' -exec touch {} + && cargo clippy --locked --keep-going --all-targets --no-default-features -- -D warnings
 RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
     find src examples tests -name '*.rs' -exec touch {} + && cargo test --locked --no-default-features
+# One feature on: src/decode.rs, src/error.rs and tests/decode.rs mix cfg(feature) and cfg(any(..)).
+RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
+    find src examples tests -name '*.rs' -exec touch {} + && cargo clippy --locked --keep-going --all-targets --no-default-features --features heif -- -D warnings
+RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
+    find src examples tests -name '*.rs' -exec touch {} + && cargo clippy --locked --keep-going --all-targets --no-default-features --features avif -- -D warnings
 RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
     find src examples tests -name '*.rs' -exec touch {} + && cargo build --locked --release --target aarch64-unknown-linux-gnu
 # The fuzz crate (libfuzzer-sys) has to compile; fuzz.yml runs its targets.
@@ -74,8 +79,9 @@ RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
     find src examples tests -name '*.rs' -exec touch {} + && cargo test --locked --release --target aarch64-unknown-linux-gnu
 
 # The parity oracles, built from source, each pinned by tag and commit (docs/parity.md):
-# libjpeg-turbo 3.2.0, libultrahdr v2.0.2, libavif v1.4.2 (with dav1d), libde265 v1.0.15, libheif v1.23.7
-# and ExifTool 13.64. CI-only,
+# libjpeg-turbo 3.2.0, libultrahdr v2.0.2, libavif v1.4.2, libde265 v1.0.15, libheif v1.23.7
+# and ExifTool 13.64. dav1d is the exception: the Debian bookworm libdav1d-dev package (1.0.0), not
+# pinned by tag and commit; build-oracle-libs.sh records the version it got. CI-only,
 # installed before `COPY . .`; never a crate dependency. The script is the only file this stage
 # copies, so a commit that leaves it alone does not build them again.
 FROM toolchain AS oracle-libs

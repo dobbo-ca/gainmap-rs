@@ -44,7 +44,7 @@ status=0
 : > "$report/exiftool.stderr"
 
 every=${PARITY_EVERY_N:-1}
-n=$(sh "$here/inputs.sh" "$corpus" "$work/in" "$every") || { echo "run.sh: inputs.sh failed" >&2; status=1; }
+n=$(INPUTS_GEN=1 sh "$here/inputs.sh" "$corpus" "$work/in" "$every") || { echo "run.sh: inputs.sh failed" >&2; status=1; }
 case $n in ''|*[!0-9]*) n=0 ;; esac
 echo "inputs: $n"
 # An empty or partial corpus must not pass: corpus.tsv and gen.sh list PARITY_MIN_INPUTS files (divided
@@ -190,7 +190,8 @@ for f in $(ls "$work/in"); do
       # libavif refuses a HEIC (no 'avif' brand), so a HEIC has no libavif metadata channel. It is
       # gated by compare.py instead: Rust must report a gain map, and its XMP values and
       # sizes are compared with ExifTool. Its planes are compared with libheif, which decodes
-      # the item ids that gainmap reports (`oracle planes` writes them to <f>.ids).
+      # the item ids that gainmap reports (`oracle planes` writes them to <f>.ids); for the Apple file
+      # the ids are also chosen by libheif itself and compared (channel heifid).
       case $f in
         *.heic|*.heif)
           timeout 900 "$heif" "$one" "$oc" "$op" || fail "$f" heif-c "exit $?"
@@ -198,6 +199,16 @@ for f in $(ls "$work/in"); do
             compare_one "$f" "heifpix-$w-info" "$w.info" raw "$oc" "$op"
             compare_one "$f" "heifpix-$w-yuv" "$w.yuv" raw "$oc" "$op"
           done
+          # The item choice, not taken from gainmap: libheif's primary item and Apple auxiliary
+          # hdrgainmap image (<f>.heifids, written only when it finds the gain map that way) must
+          # be the ids that gainmap reports.
+          if [ -f "$oc/$f.heifids" ]; then
+            res=equal
+            while IFS= read -r l; do
+              grep -qxF "$l" "$op/$f.ids" 2>/dev/null || res=differ
+            done < "$oc/$f.heifids"
+            printf '%s\t%s\t%s\t%s\t%s\n' "$f" heifid "$res" 1 "" >> "$work/results.tsv"
+          fi
           ;;
         *)
           timeout 900 "$avif" "$one" "$oc" || fail "$f" avif-c "exit $?"
@@ -272,14 +283,14 @@ BEGIN {
   base = ch; sub(/-.*/, "", base)
   part = ch; sub(/-[^-]*$/, "", part)
   if ((f SUBSEP ch) in k && (ch != "avif" || want[f SUBSEP ch] == $5)) { kn[ch]++; used[f SUBSEP ch] = 1 }
-  else if ((f SUBSEP part) in k) { kn[ch]++; used[f SUBSEP part] = 1 }
-  else if ((f SUBSEP base) in k) { kn[ch]++; used[f SUBSEP base] = 1 }
+  else if (index(ch, "-") && (f SUBSEP part) in k) { kn[ch]++; used[f SUBSEP part] = 1 }
+  else if (index(ch, "-") && (f SUBSEP base) in k) { kn[ch]++; used[f SUBSEP base] = 1 }
   else { df[ch]++; nd++; print f "\t" ch "\t" res > diffs }
 }
 END {
   print "| channel | inputs | ok | equal | differ | known | n/a |"
   print "|---|---:|---:|---:|---:|---:|---:|"
-  n = split("uhdr-txt uhdr-dims uhdr-base-jpg uhdr-gm-jpg uhdr-base-rgba uhdr-gm-raw avif turbo-base-rgba turbo-gm-raw base-prefix base-size exiftool-mpimage2 heifpix-base-info heifpix-base-yuv heifpix-gm-info heifpix-gm-yuv avifpix-base-info avifpix-base-yuv avifpix-gm-info avifpix-gm-yuv", chs, " ")
+  n = split("uhdr-txt uhdr-dims uhdr-base-jpg uhdr-gm-jpg uhdr-base-rgba uhdr-gm-raw avif turbo-base-rgba turbo-gm-raw base-prefix base-size exiftool-mpimage2 heifid heifpix-base-info heifpix-base-yuv heifpix-gm-info heifpix-gm-yuv avifpix-base-info avifpix-base-yuv avifpix-gm-info avifpix-gm-yuv", chs, " ")
   for (i = 1; i <= n; i++) { c = chs[i]; printf "| %s | %d | %d | %d | %d | %d | %d |\n", c, inputs[c], okc[c], eq[c], df[c], kn[c], na[c] }
   unused = 0
   for (key in k) if (!(key in used)) { split(key, kk, SUBSEP); if (kk[2] != "xmp") unused++ }

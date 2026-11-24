@@ -16,7 +16,7 @@ are added around them (tests/common/mod.rs). HEIF and AVIF files are built box b
 | `tests/heif.rs` | AVIF with a `tmap` primary, `tmap` version, Apple HEIC with XMP, Adobe `auxl` gain map (with and without `hdrgm` XMP, other aux types), `iden` base and gain map, no gain map, truncation and byte flips |
 | `src/error.rs` (unit) | the mapping of `hevc` and `av1` errors to ours |
 | `tests/limits.rs` | `Limits::default()`, `Error::class` tokens, every `Limit` variant through the public API, cancel, the mapping of `jpeg` and `isobmff` errors |
-| `tests/resources.rs` | counting global allocator: peak within `max_alloc` + slack for `read` and `decode` at several caps and for 1 and 2 threads; the nested JPEG decode stays under `max_threads` (`jpeg::decode_probe`); no thread spawn in `src/` |
+| `tests/resources.rs` | counting global allocator (JPEG only for `decode`; HEIF and AVIF decode is checked by `oracle planes`, which is a lower bound, not a peak): peak within `max_alloc` + slack for `read` and `decode` at several caps and for 1 and 2 threads; the nested JPEG decode stays under `max_threads` (`jpeg::decode_probe`); no thread spawn in `src/` |
 
 Doc-tests (the crate-level example in `src/lib.rs`) are compiled by `cargo test`.
 

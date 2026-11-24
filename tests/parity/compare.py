@@ -189,6 +189,15 @@ def main():
             # `oracle uhdr` wrote a gain-map JPEG for a JPEG whose gain map was read, so
             # ExifTool must have an entry for it.
             report_mismatch(name, "exiftool", gm_name, "no entry", "gain-map JPEG written")
+        elif not is_heif and et.get(name):
+            # An AVIF: the hdrgm values that ExifTool shows for the file (an Adobe auxiliary gain
+            # map keeps them in an XMP item) are compared with the gain-map values of gainmap.
+            # Only the keys ExifTool shows, and not Version (it is also the base image's).
+            keys = [k for k in GAINMAP_KEYS if k != "Version" and k in et[name]]
+            if keys:
+                check(name, "gainmap", keys, o.get("gainmap", {}), et[name])
+            else:
+                stats["no gain-map jpg for ExifTool"] += 1
         else:
             stats["no gain-map jpg for ExifTool"] += 1
         if is_heif:

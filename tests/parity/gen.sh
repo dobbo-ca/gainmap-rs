@@ -22,7 +22,7 @@ rm -f "$files"/gen_*
 failed=0
 export LD_LIBRARY_PATH="$gen/lib"
 
-jpg="$files/seine_sdr_gainmap_srgb.jpg"   # 400x300, 8-bit, with an ISO gain map (BSD-2-Clause, libavif v1.4.2)
+jpg="$files/seine_sdr_gainmap_srgb.jpg"   # 400x300, 8-bit, with an rdf:Seq XMP gain map, no ISO payload (BSD-2-Clause, libavif v1.4.2)
 hdr="$files/seine_hdr_srgb.avif"          # 400x300, 10-bit HDR (BSD-2-Clause, libavif v1.4.2)
 p010="$gen/data/raw_p010_image.p010"      # 1280x720 P010 (libultrahdr tests/data)
 for f in "$jpg" "$hdr"; do [ -f "$f" ] || { echo "gen.sh: missing input $f" >&2; exit 1; }; done
