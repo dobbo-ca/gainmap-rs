@@ -525,3 +525,114 @@ fn src_spawns_no_thread() {
     }
     assert!(hits.is_empty(), "thread use in src: {hits:?}");
 }
+
+// ---- HEIC and AVIF decode -----------------------------------------------------------------
+//
+// The in-tree HEIF and AVIF files hold stub items that no codec decodes, so these two tests run
+// on the generated files of the parity corpus (tests/parity/gen.sh), which the parity stage of
+// the CI Dockerfile points `GAINMAP_PARITY_DIR` at after gen.sh. With the variable unset they do
+// nothing, so a plain `cargo test` skips them.
+
+/// What `hevc` and `av1` may hold beyond their ledger (decoder tables, thread set-up); the files
+/// are small, so this is the same order as `DECODE_SLACK`.
+const HEIF_SLACK: usize = 2 << 20;
+
+/// The files of `gen.names` in the parity corpus (`GAINMAP_PARITY_DIR`) under 1 MiB, at most 24,
+/// by name: the generated HEIC and AVIF files of this run, not what other branches left.
+fn heif_corpus() -> Vec<(String, Vec<u8>)> {
+    let Some(dir) = std::env::var_os("GAINMAP_PARITY_DIR") else {
+        return Vec::new();
+    };
+    let dir = PathBuf::from(dir);
+    let list = fs::read_to_string(dir.join("gen.names")).unwrap_or_default();
+    let mut names: Vec<&str> = list
+        .lines()
+        .filter(|n| n.ends_with(".avif") || n.ends_with(".heic"))
+        .collect();
+    names.sort_unstable();
+    names
+        .into_iter()
+        .filter_map(|n| {
+            let d = fs::read(dir.join("files").join(n)).ok()?;
+            (d.len() < 1 << 20).then_some((n.to_string(), d))
+        })
+        .take(24)
+        .collect()
+}
+
+// The same measurement as `decode_peak_within_max_alloc`, on real HEVC and AV1 items (grids and
+// tone-mapped files included): the smallest cap that works gives an allocation error just below
+// it, and the peak stays within max_alloc plus the slack at every cap.
+#[test]
+fn heif_decode_peak_within_max_alloc() {
+    let _g = lock();
+    let files = heif_corpus();
+    let mut checked = 0;
+    for (name, data) in &files {
+        for t in [1, 2] {
+            let Ok(img) = gainmap::read(data, &limits_of(1 << 30, t), &no_cancel()) else {
+                continue;
+            };
+            let Ok(want) = gainmap::decode(data, &img, &limits_of(1 << 30, t), &no_cancel()) else {
+                continue;
+            };
+            let run = |cap: usize| {
+                let lim = limits_of(cap, t);
+                measured(|| gainmap::decode(data, &img, &lim, &no_cancel()))
+            };
+            if run(64 << 20).0.is_err() {
+                continue;
+            }
+            let (below, need) = min_alloc(|cap| run(cap).0.is_ok());
+            for cap in [below, need, need / 2, 2 * need, Limits::default().max_alloc] {
+                let at = format!("{name} threads {t} max_alloc {cap}");
+                let (r, peak) = run(cap);
+                match &r {
+                    Ok(d) => {
+                        assert_eq!(d, &want, "{at}");
+                        assert!(cap >= need, "{at}: succeeded below {need}");
+                    }
+                    Err(e) => {
+                        assert!(is_alloc_error(e), "{at}: {e}");
+                        assert!(cap < need, "{at}: failed at or above {need}");
+                    }
+                }
+                within(&at, peak, cap, HEIF_SLACK);
+            }
+            checked += 1;
+        }
+    }
+    assert!(files.is_empty() || checked > 0, "no generated file decoded");
+}
+
+// `gainmap::decode` of the generated files uses at most `max_threads` threads at once (the av1
+// grid workers included), counted by their allocations as in
+// `decode_threads_stay_under_max_threads`. The base and the gain map decode one at a time, each
+// grid with its own scoped workers, and a thread is counted for the whole run: so each image is
+// decoded alone (as `oracle planes` does), or the two sets of workers would add up.
+#[test]
+fn heif_decode_threads_stay_under_max_threads() {
+    let _g = lock();
+    for (name, data) in &heif_corpus() {
+        let Ok(img) = gainmap::read(data, &limits_of(1 << 30, 1), &no_cancel()) else {
+            continue;
+        };
+        let mut picks = vec![img.base.clone()];
+        picks.extend(img.gain_map.iter().map(|g| g.image.clone()));
+        for coded in picks {
+            let mut one = img.clone();
+            one.base = coded;
+            one.gain_map = None;
+            for t in [1usize, 2] {
+                let lim = limits_of(1 << 30, t);
+                let used = threads_used(|| {
+                    let _ = gainmap::decode(data, &one, &lim, &no_cancel());
+                });
+                assert!(
+                    used >= 1 && used as usize <= t,
+                    "{name}: {used} threads with max_threads {t}"
+                );
+            }
+        }
+    }
+}

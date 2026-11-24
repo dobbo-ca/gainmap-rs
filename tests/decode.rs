@@ -194,3 +194,53 @@ fn damaged_heif_files_never_panic_in_decode() {
         }
     }
 }
+
+// A grid base whose second tile is linked by more `tmap` items than `max_images`: `read` checks
+// only the first tile, so `decode` has to count every tile before the codec calls `Heif::image`.
+#[cfg(feature = "avif")]
+#[test]
+fn grid_tiles_are_counted_before_the_codec_runs() {
+    let mut s = Heif::new(b"avif");
+    s.primary = 5;
+    let size = s.prop(ispe(128, 48));
+    let tile = s.prop(ispe(64, 48));
+    let cfg = s.prop(av1c());
+    s.item(1, b"av01", &[1; 4], &[tile, cfg]);
+    s.item(2, b"av01", &[2; 4], &[tile, cfg]);
+    s.item(5, b"grid", &[0, 0, 0, 1, 0, 128, 0, 48], &[size]);
+    s.link(b"dimg", 5, &[1, 2]);
+    for k in 0..3 {
+        s.item(10 + k, b"tmap", &tmap_payload(0), &[]);
+        s.link(b"dimg", 10 + k, &[2]);
+    }
+    let data = s.build();
+    let l = Limits {
+        max_images: 2,
+        ..limits()
+    };
+    let img = gainmap::read(&data, &l, &no_cancel()).unwrap();
+    assert_eq!(
+        gainmap::decode(&data, &img, &l, &no_cancel()).map(|_| ()),
+        Err(Error::LimitExceeded(Limit::Images))
+    );
+}
+
+// An `iden` base reaches the codec as its input: hevc refuses an `iden` item itself.
+#[cfg(feature = "heif")]
+#[test]
+fn heic_iden_base_is_decoded_as_its_input() {
+    let mut s = Heif::new(b"heic");
+    s.primary = 3;
+    let size = s.prop(ispe(64, 48));
+    let cfg = s.prop(hvcc());
+    s.item(1, b"hvc1", &[1; 4], &[size, cfg]);
+    s.item(3, b"iden", &[], &[size]);
+    s.link(b"dimg", 3, &[1]);
+    let data = s.build();
+    let img = gainmap::read(&data, &limits(), &no_cancel()).unwrap();
+    let e = gainmap::decode(&data, &img, &limits(), &no_cancel())
+        .map(|_| ())
+        .unwrap_err();
+    assert_eq!(e.class(), "hevc");
+    assert!(!format!("{e:?}").contains("not HEVC"), "{e:?}");
+}

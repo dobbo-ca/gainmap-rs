@@ -2,7 +2,7 @@
 # Makes the flat parity input dir: tests/parity/inputs.sh <corpus> <out-dir> [every-n]
 #
 # <corpus> is what tests/parity/fetch.sh made. <out-dir> gets one symlink per file listed in
-# corpus.tsv and one per generated file listed in <corpus>/gen.names (tests/parity/gen.sh; the oracles follow
+# corpus.tsv and, when INPUTS_GEN is set, one per generated file listed in <corpus>/gen.names (tests/parity/gen.sh; the oracles follow
 # symlinks), with the corpus name. The list is sorted; with every-n only every
 # n-th file is kept (the 1st, n+1-th, ...). Prints the number of inputs.
 set -eu
@@ -18,8 +18,8 @@ here=$(cd "$(dirname "$0")" && pwd)
   grep -v '^#' "$here/corpus.tsv" | grep -v '^$' | cut -f1 | while IFS= read -r name; do
     [ -f "$corpus/files/$name" ] && [ -e "$corpus/files/$name.ok" ] && echo "$name"
   done
-  # The generated files of the last gen.sh run (it removes the older ones and rewrites gen.names).
-  if [ -f "$corpus/gen.names" ]; then
+  # The generated files of the last gen.sh run, only with INPUTS_GEN set (run.sh ran gen.sh; the arm64 and bench stages did not).
+  if [ -n "${INPUTS_GEN:-}" ] && [ -f "$corpus/gen.names" ]; then
     while IFS= read -r name; do
       [ -f "$corpus/files/$name" ] && [ -e "$corpus/files/$name.ok" ] && echo "$name"
     done < "$corpus/gen.names"

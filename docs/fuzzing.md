@@ -32,7 +32,7 @@ source, the XMP item size check and the primary-version read of the HEIF reader,
 mutation of the AVIF seed would build (the `auxC` URN alone is 40 bytes). The AVIF and HEIC seeds
 go to `read/` and `decode/`. The other targets get ISO payloads (one channel, three channels,
 common denominator, truncated); MPF payloads; XMP packets (attributes, `rdf:Seq`, Apple, garbage). The image data of every JPEG is a 1x1 grey
-baseline image, so the seeds decode. The fuzz stage of the CI image runs it with `/seeds`.
+baseline image, so the seeds decode. The fuzz stage of the CI image runs it with `/seeds`. With a corpus dir as the second argument it also copies four public HEIC and AVIF files (a `tmap` HEIC, a grid, a tone-mapped and an Adobe auxiliary gain map AVIF) as decode and read seeds, so the Planes branch of `decode` is reached; the Dockerfile fuzz stage fetches the corpus for that.
 
 ## CI
 

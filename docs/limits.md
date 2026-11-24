@@ -59,6 +59,17 @@ therefore the enforced peak for every value, the 1 GiB default included.
   planes and the metadata that come back are charged to the budget, so the gain map decodes under
   what the base left. `oracle planes` checks on the whole corpus that half of what the result
   holds gives `LimitExceeded(Alloc)`.
+- **Item graph.** The two `isobmff::Image` values that are live at once (the one `decode` parses
+  and the one the codec parses again) are charged with the same bound as `read`
+  (`image_cost`) and released when the codec returns; the transforms and `colr` properties that
+  move into `Planes` stay charged. The `max_images` count (`tmap` items and `altr` groups) runs
+  for the item and, for a grid, for every tile, because the codecs call `Heif::image` on each
+  tile and that call has no cancel check.
+- **`iden`.** An `iden` item is decoded as its input (a chain of up to 8, followed by `decode`
+  before the codec runs). The planes carry the `iden` item's own transforms and `colr`
+  properties; the input item's are not reported.
+- **SEI.** `hevc` keeps at most 1 MiB of SEI messages per picture (its `max_metadata` default)
+  and drops the rest without an error; `decode` leaves that default.
 - **Pixels.** `max_pixels` is `min(ours, 2^28)`; `hevc` also has a width and height cap of 16384
   and `av1` one of 65536, left at their defaults.
 - **Threads.** `max_threads` goes to `av1` (grid tiles decode on up to that many workers, and

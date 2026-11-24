@@ -19,6 +19,7 @@ pub enum Limit {
 /// match on the limit. Errors of the nested crates keep their own type, except the limit,
 /// out-of-memory and cancel errors, which are mapped to ours.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// The input is not a JPEG, HEIF or AVIF file.
     UnknownFormat,

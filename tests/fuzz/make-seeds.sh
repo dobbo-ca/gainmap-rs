@@ -1,6 +1,6 @@
 #!/bin/sh
 # Writes the fuzz seeds, byte by byte with printf (there are no binary fixtures in git):
-# tests/fuzz/make-seeds.sh <out-dir> makes <out-dir>/<target>/ for every fuzz target. The
+# tests/fuzz/make-seeds.sh <out-dir> [corpus-dir] makes <out-dir>/<target>/ for every fuzz target. The
 # Dockerfile fuzz stage runs it with /seeds; fuzz.yml hands those directories to libFuzzer.
 #   read    Ultra HDR JPEGs (MPF, GContainer only, "image that follows", XMP Seq, ISO only,
 #           truncated), a JPEG without a gain map, an AVIF with a tmap item (and one with an XMP
@@ -12,7 +12,7 @@
 #   scan    JPEG images: the primary, the gain map, truncated
 # The image data of every JPEG is a 1x1 grey baseline image (one DC and one AC code).
 set -eu
-out=${1:?usage: make-seeds.sh <out-dir>}
+out=${1:?usage: make-seeds.sh <out-dir> [corpus-dir]}
 t=$(mktemp -d)
 trap 'rm -rf "$t"' EXIT
 for d in read decode iso mpf xmp scan; do mkdir -p "$out/$d"; done
@@ -197,6 +197,18 @@ for f in uhdr-be.jpg uhdr-le.jpg uhdr-gcontainer.jpg uhdr-follows.jpg uhdr-seq.j
   { bytes 3; cat "$t/$f"; } > "$out/decode/3-$f"
   { bytes 0; cat "$t/$f"; } > "$out/decode/0-$f"
 done
+# Valid HEVC and AV1 streams, so that `decode` reaches its Planes branch (the stub items above
+# are refused by the codecs): public corpus files (tests/parity/corpus.tsv), when a corpus dir is
+# given as the second argument (the Dockerfile fuzz stage fetches it). A grid, a tone-mapped and
+# an Adobe auxiliary gain map AVIF and a HEIC with a `tmap`.
+if [ -n "${2:-}" ]; then
+  for f in uhdr_gainmap_hevc_16x16.heic seine_hdr_gainmap_small_srgb.avif color_grid_gainmap_different_grid.avif colors_hdr_srgb.avif; do
+    if [ -f "$2/files/$f" ] && [ -e "$2/files/$f.ok" ]; then
+      cp "$2/files/$f" "$out/read/$f"
+      { bytes 3; cat "$2/files/$f"; } > "$out/decode/3-$f"
+    fi
+  done
+fi
 tail -c +5 "$t/mpf-be" > "$out/mpf/be"
 tail -c +5 "$t/mpf-le" > "$out/mpf/le"
 tail -c +5 "$t/mpf-be" | head -c 30 > "$out/mpf/cut"

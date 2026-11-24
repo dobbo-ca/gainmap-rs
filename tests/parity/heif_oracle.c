@@ -18,7 +18,8 @@
  *                     (libheif's borders for the image size W x H), "imir axis" (0 vertical, 1
  *                     horizontal) and "irot degrees", kind by kind in that order and in property
  *                     order within a kind
- * or <f>.<which>.err when libheif cannot decode the image.
+ * or <f>.<which>.err when libheif cannot decode the image. <f>.heifids holds libheif's own base and
+ * gain-map ids (primary item, Apple auxiliary hdrgainmap image) when it finds the gain map that way.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <dirent.h>
@@ -209,6 +210,59 @@ done:
     return bad;
 }
 
+/* libheif's own choice of the base and the Apple gain map: the primary item, and the auxiliary
+   image of the primary whose auxC type names an hdrgainmap. Written to <out>/<name>.heifids as
+   "base N" and "gm N" only when the gain map is found this way (a `tmap` file has none: libheif
+   1.23.7 cannot find that item, so run.sh keeps the ids of gainmap there). run.sh compares the
+   lines with <name>.ids of gainmap, so the item choice is not taken from gainmap. */
+static int write_own_ids(heif_context *ctx, const char *name, const char *out)
+{
+    heif_item_id primary = 0, gm = 0;
+    heif_image_handle *hnd = NULL;
+    int n, i, found = 0, bad = 0;
+    heif_item_id *aux;
+    char path[4096];
+    FILE *f;
+
+    if (heif_context_get_primary_image_ID(ctx, &primary).code != heif_error_Ok ||
+        heif_context_get_image_handle(ctx, primary, &hnd).code != heif_error_Ok) {
+        return 0;
+    }
+    n = heif_image_handle_get_number_of_auxiliary_images(hnd, 0);
+    aux = n > 0 ? (heif_item_id *)malloc((size_t)n * sizeof *aux) : NULL;
+    if (aux) {
+        n = heif_image_handle_get_list_of_auxiliary_image_IDs(hnd, 0, aux, n);
+        for (i = 0; i < n && !found; i++) {
+            heif_image_handle *ah = NULL;
+            const char *type = NULL;
+            if (heif_image_handle_get_auxiliary_image_handle(hnd, aux[i], &ah).code != heif_error_Ok) {
+                continue;
+            }
+            if (heif_image_handle_get_auxiliary_type(ah, &type).code == heif_error_Ok && type) {
+                if (strstr(type, "hdrgainmap")) {
+                    gm = aux[i];
+                    found = 1;
+                }
+                heif_image_handle_release_auxiliary_type(ah, &type);
+            }
+            heif_image_handle_release(ah);
+        }
+        free(aux);
+    }
+    heif_image_handle_release(hnd);
+    if (!found) {
+        return 0;
+    }
+    if (snprintf(path, sizeof path, "%s/%s.heifids", out, name) >= (int)sizeof path || !(f = fopen(path, "wb"))) {
+        return 1;
+    }
+    fprintf(f, "base %u\ngm %u\n", (unsigned)primary, (unsigned)gm);
+    if (fclose(f) != 0) {
+        bad = 1;
+    }
+    return bad;
+}
+
 /* Decodes the items that <rust-dir>/<name>.ids lists; returns 1 when an output file could not be
    written. */
 static int decode_file(const char *path, const char *name, const char *out, const char *rust)
@@ -235,6 +289,7 @@ static int decode_file(const char *path, const char *name, const char *out, cons
         /* libheif cannot read the file: no output, which the comparison reports. */
         goto done;
     }
+    bad |= write_own_ids(ctx, name, out);
     while (fgets(line, sizeof line, ids)) {
         char which[16];
         unsigned id;

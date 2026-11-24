@@ -54,8 +54,8 @@
 //!   calling thread included. [`read`] spawns none. [`decode`] passes the value to the JPEG and
 //!   AV1 decoders (the HEVC decoder is serial); 1 runs on the calling thread.
 //! - `max_pixels` (per image), `max_xmp_bytes`, `max_segments` (JPEG markers per image) and
-//!   `max_images` (MPF entries and candidate images) each give [`Error::LimitExceeded`] with
-//!   their own [`Limit`].
+//!   `max_images` (MPF entries, candidate images, HEIF `tmap` items and `altr` groups per image)
+//!   each give [`Error::LimitExceeded`] with their own [`Limit`].
 //! - Set the cancel flag from another thread to stop a call: it returns [`Error::Cancelled`].
 
 #![forbid(unsafe_code)]
@@ -105,7 +105,9 @@ use budget::Budget;
 ///
 /// [`Error::UnknownFormat`] when `data` is not a JPEG or a file with an `ftyp` box;
 /// [`Error::Truncated`] or [`Error::Malformed`] when the primary JPEG has no EOI or SOF, or is
-/// otherwise invalid; [`Error::Heif`] for an invalid HEIF structure;
+/// otherwise invalid, or a HEIF base has an invalid `tmap` link or grid (`tmap-dimg`, `heif-grid`);
+/// [`Error::Unsupported`] for a HEIF base of an unsupported kind, a grid whose first tile is not
+/// a coded image or an `iden` chain that is too deep; [`Error::Heif`] for an invalid HEIF structure;
 /// [`Error::LimitExceeded`] for `max_alloc`, `max_pixels`, `max_xmp_bytes`, `max_segments` and
 /// `max_images`; [`Error::OutOfMemory`]; [`Error::Cancelled`].
 pub fn read(data: &[u8], limits: &Limits, cancel: &AtomicBool) -> Result<GainMapImage, Error> {

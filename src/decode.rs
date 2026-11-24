@@ -91,8 +91,10 @@ fn decode_one(
         }
         #[cfg(feature = "heif")]
         Codec::Hevc => {
-            let (heif, id, item) = heif_item(whole, img, limits, budget)?;
-            hevc_planes(data, heif, id, item, limits, budget).map(Picture::Planes)
+            let (heif, id, item, cost) = heif_item(whole, img, limits, budget)?;
+            let planes = hevc_planes(data, heif, id, item, limits, budget);
+            budget.release(cost);
+            planes.map(Picture::Planes)
         }
         #[cfg(not(feature = "heif"))]
         Codec::Hevc => {
@@ -101,8 +103,10 @@ fn decode_one(
         }
         #[cfg(feature = "avif")]
         Codec::Av1 => {
-            let (heif, id, item) = heif_item(whole, img, limits, budget)?;
-            av1_planes(data, heif, id, item, limits, budget).map(Picture::Planes)
+            let (heif, id, item, cost) = heif_item(whole, img, limits, budget)?;
+            let planes = av1_planes(data, heif, id, item, limits, budget);
+            budget.release(cost);
+            planes.map(Picture::Planes)
         }
         #[cfg(not(feature = "avif"))]
         Codec::Av1 => {
@@ -112,20 +116,75 @@ fn decode_one(
     }
 }
 
-/// The graph, the item id and the parsed item (for its transforms and colours) of a HEIF image.
+/// The graph, the id of the coded or grid item to decode, the parsed item (for its transforms and
+/// colours) and the bytes charged for the `isobmff::Image` values (two live: this one and the one
+/// the codec builds); the caller releases them when the codec has returned.
 #[cfg(any(feature = "heif", feature = "avif"))]
 fn heif_item<'a>(
     whole: &'a GainMapImage,
     img: &CodedImage,
     limits: &Limits,
     budget: &Budget<'_>,
-) -> Result<(&'a isobmff::Heif, u32, isobmff::Image), Error> {
+) -> Result<(&'a isobmff::Heif, u32, isobmff::Image, usize), Error> {
     let heif = whole.heif.as_ref().ok_or(Error::Malformed("location"))?;
     let Location::Item(id) = img.location else {
         return Err(Error::Malformed("location"));
     };
+    let cost = crate::heif::image_cost(heif);
+    budget.charge(cost)?;
+    match resolve_item(heif, id, limits, budget) {
+        Ok((coded, item)) => Ok((heif, coded, item, cost)),
+        Err(e) => {
+            budget.release(cost);
+            Err(e)
+        }
+    }
+}
+
+/// The item `id` itself (for its transforms and colours) and the id the codec decodes: an `iden`
+/// chain is followed to its input, because `hevc` takes only coded and grid items and `av1` only
+/// one `iden` level. Every tile of a grid is counted like `id`, since the codecs call
+/// `Heif::image` on each tile and that call is not cancellable.
+#[cfg(any(feature = "heif", feature = "avif"))]
+fn resolve_item(
+    heif: &isobmff::Heif,
+    id: u32,
+    limits: &Limits,
+    budget: &Budget<'_>,
+) -> Result<(u32, isobmff::Image), Error> {
     let item = crate::heif::checked_image(heif, id, limits, budget)?;
-    Ok((heif, id, item))
+    let mut coded = id;
+    let mut input = match &item.kind {
+        isobmff::ImageKind::Identity { input } => Some(*input),
+        _ => None,
+    };
+    // Only `item` and `tail` are live at once, which is what `image_cost` bounds.
+    let mut tail: Option<isobmff::Image> = None;
+    for _ in 0..=crate::heif::IDEN_DEPTH {
+        let Some(i) = input else {
+            break;
+        };
+        coded = i;
+        drop(tail.take());
+        let next = crate::heif::checked_image(heif, i, limits, budget)?;
+        input = match &next.kind {
+            isobmff::ImageKind::Identity { input } => Some(*input),
+            _ => None,
+        };
+        tail = Some(next);
+    }
+    if input.is_some() {
+        return Err(Error::Unsupported("heif-identity-depth"));
+    }
+    if let isobmff::ImageKind::Grid(g) = &tail.as_ref().unwrap_or(&item).kind {
+        for (i, tile) in g.tiles.iter().enumerate() {
+            if i.is_multiple_of(64) {
+                budget.check_cancel()?;
+            }
+            crate::heif::check_id(heif, *tile, limits, budget)?;
+        }
+    }
+    Ok((coded, item))
 }
 
 /// The `max_pixels` to pass to a codec.
@@ -169,6 +228,7 @@ fn hevc_planes(
             hevc::Samples::U16(v) => v.len().saturating_mul(2),
         });
     }
+    held = held.saturating_add(properties_bytes(&item));
     budget.charge(held)?;
     let chroma = match pic.info.chroma_format {
         hevc::ChromaFormat::Mono => Chroma::Mono,
@@ -248,6 +308,7 @@ fn av1_planes(
             av1::PlaneData::U16(v) => v.len().saturating_mul(2),
         });
     }
+    held = held.saturating_add(properties_bytes(&item));
     budget.charge(held)?;
     let chroma = match (frame.mono_chrome, frame.subsampling_x, frame.subsampling_y) {
         (true, _, _) => Chroma::Mono,
@@ -286,6 +347,19 @@ fn av1_planes(
         })
         .collect();
     finish(planes, chroma, item, cicp, metadata)
+}
+
+/// The bytes of the transforms and colours that `finish` moves into the planes.
+#[cfg(any(feature = "heif", feature = "avif"))]
+fn properties_bytes(item: &isobmff::Image) -> usize {
+    item.transforms
+        .capacity()
+        .saturating_mul(size_of::<isobmff::Transform>())
+        .saturating_add(
+            item.colour
+                .capacity()
+                .saturating_mul(size_of::<isobmff::Colour>()),
+        )
 }
 
 /// Puts the decoded planes and the properties of the item together.

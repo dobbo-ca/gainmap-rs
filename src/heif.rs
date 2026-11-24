@@ -112,7 +112,7 @@ fn graph_cost(h: &Heif) -> usize {
 /// transient image): aux ids, thumbnails and grid tiles are each at most the `to` ids in the file;
 /// transforms and colours are at most the associations of one item; an overlay image holds a
 /// clone of the inputs of its item.
-fn image_cost(h: &Heif) -> usize {
+pub(crate) fn image_cost(h: &Heif) -> usize {
     let to_total = h
         .references
         .iter()
@@ -143,6 +143,18 @@ pub(crate) fn checked_image(
     limits: &Limits,
     budget: &Budget<'_>,
 ) -> Result<isobmff::Image, Error> {
+    check_id(heif, id, limits, budget)?;
+    Ok(heif.image(id)?)
+}
+
+/// The count of [`checked_image`] without the `Heif::image` call: `decode` runs it for every tile
+/// of a grid, because the codecs call `Heif::image` on each of them.
+pub(crate) fn check_id(
+    heif: &Heif,
+    id: u32,
+    limits: &Limits,
+    budget: &Budget<'_>,
+) -> Result<(), Error> {
     let mut tmaps = 0usize;
     for (i, r) in heif.references.iter().enumerate() {
         if i.is_multiple_of(1024) {
@@ -169,7 +181,7 @@ pub(crate) fn checked_image(
     if tmaps > limits.max_images || groups > limits.max_images {
         return Err(Error::LimitExceeded(Limit::Images));
     }
-    Ok(heif.image(id)?)
+    Ok(())
 }
 
 /// Errors that end the read instead of becoming an issue.
@@ -188,7 +200,7 @@ fn coded_of(config: &CodecConfig) -> (Codec, u8) {
 }
 
 /// The longest chain of `iden` items that [`coded`] follows.
-const IDEN_DEPTH: usize = 8;
+pub(crate) const IDEN_DEPTH: usize = 8;
 
 /// The Adobe auxiliary image type of a gain map (`auxC`), which `isobmff` does not look for.
 const ADOBE_GAIN_MAP: &str = "urn:com:photo:aux:hdrgainmap";

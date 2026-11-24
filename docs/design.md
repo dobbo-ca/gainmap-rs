@@ -107,7 +107,8 @@ an allocation failure or the cancel flag ends `read` early.
   vectors are moved out of hevc-rs and av1-rs, never copied. `Planes` also carry the `colr`
   properties of the item as stored (an ICC profile stays an extent of the input), the codec CICP
   (HEVC VUI, `None` when the SPS has none; AV1 `color_config`) and the codec metadata (HEVC SEI
-  messages, AV1 metadata OBUs), raw. Nothing is dropped (metadata rule: keep); `decode` has no
+  messages, AV1 metadata OBUs), raw. Nothing is dropped by `decode` (metadata rule: keep) except
+  the SEI past the 1 MiB `hevc` keeps per picture; `decode` has no
   options parameter, so there is no way to drop the metadata yet.
 
 Budget: the base stays charged while the gain map decodes, so the gain map gets the rest of
