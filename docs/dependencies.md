@@ -23,7 +23,7 @@ These are in Cargo.lock because of the crates above (hevc and av1 add nothing be
 | `rayon-core` 1.13.0, `crossbeam-deque` 0.8.8, `crossbeam-epoch` 0.9.21, `crossbeam-utils` 0.8.23, `either` 1.19.0 | `rayon` | The work-stealing deque, its memory reclamation and helpers. Registry crates; no choice, they are rayon's own dependencies. |
 
 No C dependency, no `-sys` crate, no `cc`/`bindgen`, no proc macro, no XML crate.
-CI fetches the git dependencies, while those repos are private, with the `dobbo-ca-ci-read` GitHub App token
+CI fetches the git dependencies, while those repos are private, with a read-only GitHub App token
 (`repositories: jpeg-rs,exif-rs,isobmff-rs,deflate-rs,hevc-rs,av1-rs`).
 
 ## Ported code
