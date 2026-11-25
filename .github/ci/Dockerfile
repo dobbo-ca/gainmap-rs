@@ -1,6 +1,7 @@
-# CI image: Rust runs here, on the in-cluster BuildKit, because the ARC runner has no toolchain.
-# The crate depends on five private dobbo-ca ports by git rev (jpeg-rs, exif-rs, isobmff-rs, hevc-rs,
-# av1-rs), and those depend on a sixth (deflate-rs). The fetch is the only step that needs the GitHub App
+# CI image: Rust runs here, built with docker buildx on GitHub-hosted runners (ubuntu-24.04 for
+# x86_64, ubuntu-24.04-arm for the native arm64 stages).
+# The crate depends on dobbo-ca/jpeg-rs, exif-rs, isobmff-rs, hevc-rs and av1-rs by git rev,
+# and those on dobbo-ca/deflate-rs; while those repos are private the fetch is the only step that needs the GitHub App
 # token, passed as the BuildKit secret `gh_token` (never a build arg, never written to a layer);
 # every later step runs offline. jpeg-rs also pulls rayon from crates.io, and the fuzz crate pulls
 # libfuzzer-sys, so the same step fetches the registry crates too.
@@ -8,7 +9,15 @@
 # and the fetch runs from the manifests and lockfiles alone, so a commit that leaves them alone
 # does not fetch again.
 FROM rust:1.99.1-bookworm AS toolchain
-RUN rustup component add rustfmt clippy && rustup target add aarch64-unknown-linux-gnu
+ARG TARGETARCH
+# On x86_64, gcc-aarch64-linux-gnu is the linker of `cargo build/clippy --target aarch64-unknown-linux-gnu`
+# (the aarch64 lint and link check in `ci`). On arm64 that target is the host: no cross toolchain.
+RUN rustup component add rustfmt clippy && rustup target add aarch64-unknown-linux-gnu \
+    && if [ "$TARGETARCH" = amd64 ]; then \
+         apt-get update && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
+         && rm -rf /var/lib/apt/lists/* \
+         && printf '[target.aarch64-unknown-linux-gnu]\nlinker = "aarch64-linux-gnu-gcc"\n' >> "$CARGO_HOME/config.toml"; \
+       fi
 WORKDIR /src
 
 # Only the manifests, with empty targets for what they name, so cargo can resolve them.
@@ -58,23 +67,17 @@ RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
 RUN --mount=type=cache,id=gainmap-fuzz-target,target=/src/tests/fuzz/target,sharing=locked \
     find src examples tests -name '*.rs' -exec touch {} + && cd tests/fuzz && cargo check --locked --bins
 
-# qemu-user and the aarch64 cross toolchain, for the arm64 stages.
-FROM toolchain AS qemu-tools
-RUN apt-get update && apt-get install -y --no-install-recommends qemu-user gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
-    && rm -rf /var/lib/apt/lists/*
-ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER="qemu-aarch64 -L /usr/aarch64-linux-gnu"
-
-FROM qemu-tools AS qemu-arm64
+# The arm64 stages are built natively on an arm64 runner (ubuntu-24.04-arm): no emulator.
+FROM toolchain AS native-arm64
 COPY --from=deps /usr/local/cargo/registry /usr/local/cargo/registry
 COPY --from=deps /usr/local/cargo/git /usr/local/cargo/git
 ENV CARGO_NET_OFFLINE=true
 COPY . .
 
-# The whole suite runs on aarch64 under qemu-user, released: the crate is small and has no SIMD of
+# The whole suite runs on aarch64, released: the crate is small and has no SIMD of
 # its own, so there are no kernel-only tests to select. What the target changes is the NEON
 # kernels of jpeg-rs and av1-rs (loop filter), which every decode of the tests runs.
-FROM qemu-arm64 AS arm64
+FROM native-arm64 AS arm64
 RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
     find src examples tests -name '*.rs' -exec touch {} + && cargo test --locked --release --target aarch64-unknown-linux-gnu
 
@@ -155,22 +158,31 @@ RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
 FROM scratch AS parity-report
 COPY --from=parity /report /
 
-# The same oracle example built for x86_64 and for aarch64 (run under qemu-user) reads every 4th
-# input; `oracle uhdr`, `avif`, `planes` and `xmp` outputs (text, coded bytes and pixels) must be
-# byte-identical. The outputs of one input are deleted before the next, so the layer stays small.
-FROM qemu-tools AS parity-arm64
-COPY --from=deps /usr/local/cargo/registry /usr/local/cargo/registry
-COPY --from=deps /usr/local/cargo/git /usr/local/cargo/git
-ENV CARGO_NET_OFFLINE=true
-COPY . .
+# The x86_64 half of the arm64 parity: the oracle example reads every 4th input; the checksums of
+# its `uhdr`, `avif`, `planes` and `xmp` outputs (text, coded bytes and pixels) go to /ref.
+FROM src AS x86-ref
 RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
     --mount=type=cache,id=gainmap-corpus,target=/corpus,sharing=locked \
     find src examples tests -name '*.rs' -exec touch {} + \
     && sh tests/parity/fetch.sh /corpus \
     && cargo build --locked --release --example oracle \
+    && sh tests/parity/arm64.sh ref /corpus target/release/examples/oracle /ref 4
+
+# The x86_64 reference as a build output (job parity-ref uploads it for parity-arm64).
+FROM scratch AS x86-ref-out
+COPY --from=x86-ref /ref /
+
+# The same oracle example built natively for aarch64 reads the same inputs; the checksums of its
+# outputs must equal those of `x86-ref-out`, which the workflow passes as the named build context
+# `x86ref`. The outputs of one input are deleted before the next, so the layer stays small.
+FROM native-arm64 AS parity-arm64
+RUN --mount=type=cache,id=gainmap-target,target=/src/target,sharing=locked \
+    --mount=type=cache,id=gainmap-corpus,target=/corpus,sharing=locked \
+    --mount=type=bind,from=x86ref,target=/ref \
+    find src examples tests -name '*.rs' -exec touch {} + \
+    && sh tests/parity/fetch.sh /corpus \
     && cargo build --locked --release --target aarch64-unknown-linux-gnu --example oracle \
-    && sh tests/parity/arm64.sh /corpus target/release/examples/oracle \
-       "qemu-aarch64 -L /usr/aarch64-linux-gnu target/aarch64-unknown-linux-gnu/release/examples/oracle" 4
+    && sh tests/parity/arm64.sh arm /corpus target/aarch64-unknown-linux-gnu/release/examples/oracle /ref 4
 
 # Fuzzing (fuzz.yml): nightly and cargo-fuzz, with the targets built into the image. The workflow
 # runs it with `docker run`, so a BuildKit cache hit cannot skip the fuzzing. No corpus in the

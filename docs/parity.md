@@ -440,9 +440,9 @@ These are known from its sources (v2.0.2); none was run.
 
 ## parity-arm64
 
-`tests/parity/arm64.sh` builds the oracle for x86_64 and for aarch64 (run under `qemu-user`),
-and runs `uhdr`, `avif`, `planes` and `xmp` over every 4th input with both; the output dirs are compared
-with `diff -r` and must be identical. This covers jpeg-rs's NEON and AVX2 decode paths and the
+`tests/parity/arm64.sh` runs the oracle built for x86_64 (job `parity-ref`, x86_64 runner) and for aarch64 (job `parity-arm64`, native arm64 runner),
+over every 4th input with `uhdr`, `avif`, `planes` and `xmp`; the x86_64 side keeps the sha256 of every output file and the aarch64 side compares its own with them, which is the same test as comparing the output dirs
+and they must be identical. This covers jpeg-rs's NEON and AVX2 decode paths and the
 `libm` `exp2` / `exp2f` of the two architectures. If a text file ever differs by one bit in an
 `exp2` line only, the cause is the `libm` of the two targets (glibc picks an FMA variant on
 x86_64); say so here and decide then.

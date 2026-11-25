@@ -29,9 +29,9 @@ docs/fuzzing.md, docs/corpus.md and docs/benchmarks.md.
 
 - `test`: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test`, each also with `--no-default-features` (the codec features off), and the
   aarch64 release build. Runs on pull requests; the only required check.
-- `arm64`: `cargo test` for aarch64 under `qemu-aarch64`. Push to `main` and dispatch only.
+- `arm64`: `cargo test` for aarch64 on a native arm64 runner (`ubuntu-24.04-arm`). Push to `main` and dispatch only.
 - `parity`: the C and C++ oracles against `examples/oracle.rs` on the same inputs.
-- `parity-arm64`: the oracle example under qemu on a subset of the inputs.
+- `parity-ref`, `parity-arm64`: the x86_64 oracle output of a subset of the inputs (checksums, from an x86_64 runner), and the same oracle built natively for aarch64 on an arm64 runner, compared with it.
 - `fuzz` and `bench`: weekly or on dispatch.
 
 The crate is done when `arm64`, `parity` and `parity-arm64` are green on `main`.
