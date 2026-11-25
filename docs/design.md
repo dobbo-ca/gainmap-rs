@@ -144,7 +144,7 @@ HDR rendering step, or opts in:
 
 `decode` is `decode_with(.., &DecodeOptions::default(), ..)` and stays raw. With
 `DecodeOptions { apply_transforms: true }` each HEIC or AVIF `Planes` (base and gain map) goes
-through `isobmff::apply_transforms` (a second isobmff rev, `isobmff_tr`, docs/dependencies.md),
+through `isobmff::apply_transforms` (docs/dependencies.md),
 which owns the crop rounding (`Clap::crop_rounded`) and the chroma rules (4:2:2 turned 4:4:4 by a 90 or 270
 rotation, chroma kept on odd geometry, so it can differ from libheif there; isobmff-rs docs/transforms.md):
 
