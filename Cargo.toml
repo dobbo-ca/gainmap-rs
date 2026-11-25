@@ -11,10 +11,10 @@ publish = false
 default = ["heif", "avif"]
 # HEVC decode of the base image and the gain map of a HEIC file. Off: `decode` gives
 # `Error::Unsupported("hevc decode")`.
-heif = ["dep:hevc", "dep:isobmff_tr"]
+heif = ["dep:hevc"]
 # AV1 decode of the base image and the gain map of an AVIF file. Off: `decode` gives
 # `Error::Unsupported("av1 decode")`.
-avif = ["dep:av1", "dep:isobmff_tr"]
+avif = ["dep:av1"]
 
 [dependencies]
 # Baseline and progressive JPEG decode of the SDR base and the gain-map image (docs/dependencies.md).
@@ -22,13 +22,11 @@ jpeg = { git = "https://github.com/dobbo-ca/jpeg-rs", rev = "22a2c3196d9afbd9df1
 # XMP packet parse (hdrgm, GContainer, Apple HDRGainMap properties).
 exif = { git = "https://github.com/dobbo-ca/exif-rs", rev = "c2e986828db71b63e0b436e8e44f41d9ebe77620" }
 # HEIF / AVIF boxes: items, iref, entity groups, auxC, item data.
-isobmff = { git = "https://github.com/dobbo-ca/isobmff-rs", rev = "26953d6120830fee8173964f7222e95f5cc3a35c" }
-# isobmff-rs transform helper (apply_transforms). A second rev until hevc-rs and av1-rs move to it; then merge with the isobmff line above.
-isobmff_tr = { package = "isobmff", git = "https://github.com/dobbo-ca/isobmff-rs", rev = "e69c81d32646e13de8b66f51729ff12101f9b3bc", optional = true }
+isobmff = { git = "https://github.com/dobbo-ca/isobmff-rs", rev = "c4f748bbc4798bc6cc5eb56461851a28527be8c9" }
 # HEVC and AV1 decode of image items. Both use the isobmff rev above, so `&isobmff::Heif` is one
 # type in all three crates: bump the three pins together.
-hevc = { git = "https://github.com/dobbo-ca/hevc-rs", rev = "fee58e6df500cee3585d810541f8447667712e23", optional = true }
-av1 = { git = "https://github.com/dobbo-ca/av1-rs", rev = "68e575a37b4d0de82c9212ee6503853f11deba45", optional = true }
+hevc = { git = "https://github.com/dobbo-ca/hevc-rs", rev = "5939cf1dca624b30233eaa6051838862128c3c52", optional = true }
+av1 = { git = "https://github.com/dobbo-ca/av1-rs", rev = "5b0643fa7021a172ed0c512870a7583262a59df6", optional = true }
 
 [profile.release]
 codegen-units = 1
