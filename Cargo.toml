@@ -20,7 +20,7 @@ avif = ["dep:av1"]
 # Baseline and progressive JPEG decode of the SDR base and the gain-map image (docs/dependencies.md).
 jpeg = { git = "https://github.com/dobbo-ca/jpeg-rs", rev = "22a2c3196d9afbd9df1e0fda2b6ca3caf590d38c" }
 # XMP packet parse (hdrgm, GContainer, Apple HDRGainMap properties).
-exif = { git = "https://github.com/dobbo-ca/exif-rs", rev = "c2e986828db71b63e0b436e8e44f41d9ebe77620" }
+exif = { git = "https://github.com/dobbo-ca/exif-rs", rev = "450c284659ee0cf6dfc91cf69aabfbc89c836781" }
 # HEIF / AVIF boxes: items, iref, entity groups, auxC, item data.
 isobmff = { git = "https://github.com/dobbo-ca/isobmff-rs", rev = "c4f748bbc4798bc6cc5eb56461851a28527be8c9" }
 # HEVC and AV1 decode of image items. Both use the isobmff rev above, so `&isobmff::Heif` is one
