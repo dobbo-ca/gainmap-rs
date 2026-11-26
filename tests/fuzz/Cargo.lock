@@ -11,7 +11,7 @@ checksum = "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
 [[package]]
 name = "av1"
 version = "0.1.0"
-source = "git+https://github.com/dobbo-ca/av1-rs?rev=5b0643fa7021a172ed0c512870a7583262a59df6#5b0643fa7021a172ed0c512870a7583262a59df6"
+source = "git+https://github.com/dobbo-ca/av1-rs?rev=84cccd37d6be58f3c25923f06be023a828f23a8a#84cccd37d6be58f3c25923f06be023a828f23a8a"
 dependencies = [
  "isobmff",
 ]
