@@ -26,7 +26,7 @@ isobmff = { git = "https://github.com/dobbo-ca/isobmff-rs", rev = "c4f748bbc4798
 # HEVC and AV1 decode of image items. Both use the isobmff rev above, so `&isobmff::Heif` is one
 # type in all three crates: bump the three pins together.
 hevc = { git = "https://github.com/dobbo-ca/hevc-rs", rev = "5939cf1dca624b30233eaa6051838862128c3c52", optional = true }
-av1 = { git = "https://github.com/dobbo-ca/av1-rs", rev = "5b0643fa7021a172ed0c512870a7583262a59df6", optional = true }
+av1 = { git = "https://github.com/dobbo-ca/av1-rs", rev = "84cccd37d6be58f3c25923f06be023a828f23a8a", optional = true }
 
 [profile.release]
 codegen-units = 1
