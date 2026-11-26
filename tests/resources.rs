@@ -462,8 +462,9 @@ fn decode_threads_stay_under_max_threads() {
         })
         .max()
         .unwrap_or(0);
-    // Under qemu-user (the arm64 job) jpeg-rs may run this image on one worker, so the check
-    // that the image is big enough to thread holds on x86_64 only; the bounds below hold anywhere.
+    // On arm64 jpeg-rs may run this image on one worker (the gate was set when that job ran under
+    // emulation), so the check that the image is big enough to thread holds on x86_64 only; the
+    // bounds below hold anywhere.
     if cfg!(target_arch = "x86_64") {
         assert!(
             peak > 1,

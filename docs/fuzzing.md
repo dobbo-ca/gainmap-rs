@@ -60,4 +60,4 @@ The default is 600 s. The fuzz hours of a run are `max_total_time` x 6 targets.
 
 ## Locally
 
-Do not run it on the owner's machine (docs/conventions.md of the port series): CI only.
+Do not run it on the owner's machine: CI only.
