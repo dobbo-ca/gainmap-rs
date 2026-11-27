@@ -11,7 +11,7 @@ checksum = "3bc62ac97cc33321f50863d514c3bc38a453947a8f9e781137e47c7401020aed"
 [[package]]
 name = "av1"
 version = "0.1.0"
-source = "git+https://github.com/dobbo-ca/av1-rs?rev=84cccd37d6be58f3c25923f06be023a828f23a8a#84cccd37d6be58f3c25923f06be023a828f23a8a"
+source = "git+https://github.com/dobbo-ca/av1-rs?rev=5b0f0d1f5d19460804b2c95b70a03572efa45e49#5b0f0d1f5d19460804b2c95b70a03572efa45e49"
 dependencies = [
  "isobmff",
 ]
@@ -117,7 +117,7 @@ dependencies = [
 [[package]]
 name = "hevc"
 version = "0.1.0"
-source = "git+https://github.com/dobbo-ca/hevc-rs?rev=5939cf1dca624b30233eaa6051838862128c3c52#5939cf1dca624b30233eaa6051838862128c3c52"
+source = "git+https://github.com/dobbo-ca/hevc-rs?rev=dc3aec975bac441183173870ce3c6a496100eb50#dc3aec975bac441183173870ce3c6a496100eb50"
 dependencies = [
  "isobmff",
 ]
@@ -125,7 +125,7 @@ dependencies = [
 [[package]]
 name = "isobmff"
 version = "0.1.0"
-source = "git+https://github.com/dobbo-ca/isobmff-rs?rev=c4f748bbc4798bc6cc5eb56461851a28527be8c9#c4f748bbc4798bc6cc5eb56461851a28527be8c9"
+source = "git+https://github.com/dobbo-ca/isobmff-rs?rev=439720afc00ff988ff8e25fe3b2f932b09e809e2#439720afc00ff988ff8e25fe3b2f932b09e809e2"
 
 [[package]]
 name = "jobserver"
