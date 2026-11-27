@@ -22,11 +22,11 @@ jpeg = { git = "https://github.com/dobbo-ca/jpeg-rs", rev = "c0cf0fcc3a5c4284bf0
 # XMP packet parse (hdrgm, GContainer, Apple HDRGainMap properties).
 exif = { git = "https://github.com/dobbo-ca/exif-rs", rev = "450c284659ee0cf6dfc91cf69aabfbc89c836781" }
 # HEIF / AVIF boxes: items, iref, entity groups, auxC, item data.
-isobmff = { git = "https://github.com/dobbo-ca/isobmff-rs", rev = "c4f748bbc4798bc6cc5eb56461851a28527be8c9" }
+isobmff = { git = "https://github.com/dobbo-ca/isobmff-rs", rev = "439720afc00ff988ff8e25fe3b2f932b09e809e2" }
 # HEVC and AV1 decode of image items. Both use the isobmff rev above, so `&isobmff::Heif` is one
 # type in all three crates: bump the three pins together.
-hevc = { git = "https://github.com/dobbo-ca/hevc-rs", rev = "5939cf1dca624b30233eaa6051838862128c3c52", optional = true }
-av1 = { git = "https://github.com/dobbo-ca/av1-rs", rev = "84cccd37d6be58f3c25923f06be023a828f23a8a", optional = true }
+hevc = { git = "https://github.com/dobbo-ca/hevc-rs", rev = "dc3aec975bac441183173870ce3c6a496100eb50", optional = true }
+av1 = { git = "https://github.com/dobbo-ca/av1-rs", rev = "5b0f0d1f5d19460804b2c95b70a03572efa45e49", optional = true }
 
 [profile.release]
 codegen-units = 1
